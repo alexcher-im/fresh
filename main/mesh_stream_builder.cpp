@@ -14,7 +14,8 @@ void MeshStreamBuilder::write(const ubyte* data, uint size) {
     if (!cache_fill) {
         sent = controller.router.write_data_stream_bytes(dst_addr, sent_size, data, size,
                                                          sent_size + size >= stream_size,
-                                                         stream_id, stream_size);
+                                                         stream_id, stream_size, MeshController::DEFAULT_TTL,
+                                                         controller.self_addr);
 
         if (sent != size) {
             auto remain_size = size - sent;
@@ -30,7 +31,8 @@ void MeshStreamBuilder::write(const ubyte* data, uint size) {
         cache_fill += size;
         sent = controller.router.write_data_stream_bytes(dst_addr, sent_size, cache, cache_fill,
                                                          sent_size + size >= stream_size,
-                                                         stream_id, stream_size);
+                                                         stream_id, stream_size, MeshController::DEFAULT_TTL,
+                                                         controller.self_addr);
 
         if (sent != cache_fill) {
             auto remain_size = cache_fill - sent;
@@ -50,7 +52,8 @@ void MeshStreamBuilder::write(const ubyte* data, uint size) {
 
 MeshStreamBuilder::~MeshStreamBuilder() {
     if (cache_fill) {
-        controller.router.write_data_stream_bytes(dst_addr, sent_size, cache, cache_fill, true, stream_id, stream_size);
+        controller.router.write_data_stream_bytes(dst_addr, sent_size, cache, cache_fill, true, stream_id,
+                                                  stream_size, MeshController::DEFAULT_TTL, controller.self_addr);
     }
     free(cache);
 }

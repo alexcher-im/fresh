@@ -100,7 +100,10 @@ static bool check_stream_completeness(MeshController& controller, const DataStre
 
     compete_data_stream(controller, stream.stream_data, stream.stream_size, identity.src_addr, identity.dst_addr);
     stream.stream_data = nullptr;
-    controller.data_streams.erase(identity);
+
+    // broadcasts are never deleted immediately. at this point, .is_completed() will always return false and stream will only expire
+    if (identity.dst_addr != BROADCAST_FAR_ADDR)
+        controller.data_streams.erase(identity);
     return true;
 }
 
@@ -303,28 +306,33 @@ static inline void handle_near_insecure(MeshController& controller, uint interfa
 }
 
 static inline void add_rx_data_packet_to_cache(MeshController& controller, DataStreamIdentity identity,
-                                               uint offset, ubyte* data, uint size) {
-    auto& entry = controller.data_parts_cache[identity];
+                                               uint offset, ubyte* data, uint size, ubyte broadcast_ttl=0) {
+    auto& cached_stream = controller.router.packet_cache.rx_stream_cache[identity];
+    auto& entry = cached_stream.part;
+    cached_stream.last_modif_timestamp = esp_timer_get_time();
+
     if (entry.data) {
-        auto new_entry = (CachedDataStreamPart*) malloc(sizeof(CachedDataStreamPart));
+        auto new_entry = (CachedRxDataStreamPart*) malloc(sizeof(CachedRxDataStreamPart));
         *new_entry = entry;
         entry.next = new_entry;
     }
     entry.offset = offset;
     entry.size = size;
     entry.data = (ubyte*) malloc(size);
+    entry.broadcast_ttl = broadcast_ttl;
     memcpy(entry.data, data, size);
 }
 
-static inline void handle_data_first_packet(MeshController& controller, PacketFarDataFirst* packet, uint payload_size,
+static inline bool handle_data_first_packet(MeshController& controller, PacketFarDataFirst* packet, uint payload_size,
                                             far_addr_t src, far_addr_t dst) {
     decltype(packet->stream_size) stream_size;
     memcpy(&stream_size, &packet->stream_size, sizeof(stream_size));
 
-    if (payload_size >= stream_size) {
+    if (payload_size >= stream_size && dst != BROADCAST_FAR_ADDR) {
         auto stream_content = (ubyte*) malloc(stream_size);
         memcpy(stream_content, packet->payload, stream_size);
         compete_data_stream(controller, stream_content, stream_size, src, dst);
+        return true;
     }
     else {
         DataStreamIdentity identity;
@@ -333,31 +341,37 @@ static inline void handle_data_first_packet(MeshController& controller, PacketFa
         identity.stream_id = packet->stream_id;
         auto& stream = controller.data_streams.try_emplace(identity, stream_size, esp_timer_get_time()).first->second;
 
-        stream.add_data(0, packet->payload, payload_size);
+        auto result = stream.add_data(0, packet->payload, payload_size);
         check_stream_completeness(controller, identity, stream);
+        return result;
     }
 }
 
-static inline void handle_data_part_packet(MeshController& controller, PacketFarDataPart8* packet, uint payload_size,
+static inline bool handle_data_part_packet(MeshController& controller, PacketFarDataPart8* packet, uint payload_size,
                                            far_addr_t src, far_addr_t dst) {
     DataStreamIdentity identity;
     identity.src_addr = src;
     identity.dst_addr = dst;
     identity.stream_id = packet->stream_id;
 
+    ushort offset;
+    memcpy(&offset, &packet->offset, sizeof(ushort));
+
     auto stream_iter = controller.data_streams.find(identity);
     if (stream_iter == controller.data_streams.end()) {
-        add_rx_data_packet_to_cache(controller, identity, packet->offset, packet->payload, payload_size);
-        return;
+        add_rx_data_packet_to_cache(controller, identity, offset, packet->payload, payload_size);
+        return false;
     }
     auto& stream = stream_iter->second;
 
-    stream.add_data(packet->offset, packet->payload, payload_size);
-    stream.last_modif_timestamp = esp_timer_get_time();
+    auto result = stream.add_data(offset, packet->payload, payload_size);
+    if (result)
+        stream.last_modif_timestamp = esp_timer_get_time();
     check_stream_completeness(controller, identity, stream);
+    return result;
 }
 
-static inline void retransmit_broadcast(MeshController& controller, MeshPacket* packet, uint size, uint payload_size) {
+static inline void retransmit_broadcast(MeshController& controller, MeshPacket* packet, uint size, uint payload_size, uint offset, far_addr_t src_addr) {
     for (auto [peer_addr, peer] : controller.router.peers) {
         auto interface = peer.interface;
         auto mtu = controller.interfaces[interface->id].mtu;
@@ -366,16 +380,19 @@ static inline void retransmit_broadcast(MeshController& controller, MeshPacket* 
             mtu -= MESH_SECURE_PACKET_OVERHEAD;
 
         if (size > mtu) {
-            // todo set specific source address and broadcast id here
-            controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, 0, packet->bc_data.first.payload, payload_size, true,
-                                                      packet->bc_data.first.stream_id, packet->bc_data.first.stream_size);
+            // fixme unaligned access to many parameters
+            controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, offset, packet->bc_data.first.payload, payload_size, true,
+                                                      packet->bc_data.first.stream_id, packet->bc_data.first.stream_size,
+                                                      src_addr, packet->ttl); // ttl already decreased
         }
         else {
             auto phy_addr = controller.interfaces[interface->id].sessions->get_phy_addr(peer_addr);
             auto session = controller.interfaces[interface->id].sessions->get_or_none_session(phy_addr);
-            generate_packet_signature(&controller, session, packet, size);
-            if (controller.interfaces[interface->id].is_secured)
+            if (controller.interfaces[interface->id].is_secured) {
+                // fixme it is not guaranteed that packet has enough size for signature
+                generate_packet_signature(&controller, session, packet, size);
                 size += MESH_SECURE_PACKET_OVERHEAD;
+            }
             interface->send_packet(phy_addr, packet, size);
         }
     }
@@ -397,6 +414,7 @@ void IRAM_ATTR MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_a
     if (!MESH_FIELD_ACCESSIBLE(type, size))
         return;
     printf("got a packet from (" MACSTR "): type=%d, size=%d\n", MAC2STR((ubyte*) phy_addr), (int) packet->type, size);
+    fflush(stdout);
     // todo handle non-secured interfaces as well
     // todo add encryption for data streams
     auto& interface_descr = interfaces[interface_id];
@@ -441,8 +459,6 @@ void IRAM_ATTR MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_a
         update_sha256(&hash_ctx, packet, sign_offset);
         update_sha256(&hash_ctx, &hash_concat_params, sizeof(MessageHashConcatParams));
         finish_sha256(&hash_ctx, correct_signature);
-        printf("packet hash calculated!\n");
-        fflush(stdout);
 
         if (!!memcmp(&correct_signature, &packet_signature, std::min(sizeof(hashdigest_t), sizeof(correct_signature))))
             return;
@@ -496,24 +512,30 @@ void IRAM_ATTR MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_a
     if (packet->type == MeshPacketType::BROADCAST_DATA_FIRST) {
         if (!MESH_FIELD_ACCESSIBLE(bc_data.first, size))
             return;
-        if (last_broadcast_ids.contains_add(packet->broadcast_id))
+        if (dst != BROADCAST_FAR_ADDR)
             return;
+        // todo add ttl check here and in far data packets
+        //if (!--packet->ttl)
+        //    return;
 
         auto payload_size = size - MESH_CALC_SIZE(bc_data.first.payload);
-        retransmit_broadcast(*this, packet, size, payload_size);
-        handle_data_first_packet(*this, &packet->bc_data.first, payload_size, src, dst);
+        if (handle_data_first_packet(*this, &packet->bc_data.first, payload_size, src, dst))
+            retransmit_broadcast(*this, packet, size, payload_size, 0, src);
         return;
     }
 
     if (packet->type == MeshProto::MeshPacketType::BROADCAST_DATA_PART) {
         if (!MESH_FIELD_ACCESSIBLE(bc_data.part_8, size))
             return;
-        if (last_broadcast_ids.contains_add(packet->broadcast_id))
+        if (dst != BROADCAST_FAR_ADDR)
             return;
 
+        ushort offset;
+        memcpy(&offset, &packet->bc_data.part_8.offset, sizeof(ushort));
+
         auto payload_size = size - MESH_CALC_SIZE(bc_data.part_8.payload);
-        retransmit_broadcast(*this, packet, size, payload_size);
-        handle_data_part_packet(*this, &packet->bc_data.part_8, payload_size, src, dst);
+        if (handle_data_part_packet(*this, &packet->bc_data.part_8, payload_size, src, dst))
+            retransmit_broadcast(*this, packet, size, payload_size, offset, src);
         return;
     }
 
@@ -633,11 +655,17 @@ MeshController::~MeshController() {
 
 void MeshController::check_data_streams() {
     auto time = esp_timer_get_time();
-    for (auto& [identity, stream] : data_streams) {
+
+    for (auto i = data_streams.begin(); i != data_streams.end();) {
+        auto& identity = i->first;
+        auto& stream = i->second;
+
         if (check_stream_completeness(*this, identity, stream))
             continue;
-        if (stream.is_exhausted(time))
-            data_streams.erase(identity);
+        if (stream.is_expired(time, identity.dst_addr == BROADCAST_FAR_ADDR))
+            i = data_streams.erase(i);
+        else
+            ++i;
     }
 }
 
@@ -826,12 +854,13 @@ void Router::check_packet_cache(MeshProto::far_addr_t dst) {
 
             if (entry->type == CachedTxDataInfo::CachedDataType::DATA_STREAM) {
                 auto curr_part = &entry->data_stream.part;
+                auto peer = peers[route.routes[0].gateway_addr];
+
                 while (curr_part) {
                     // fixme this is not optimal to set force_send=true on part packets, however it is a rare case
-                    // also do not re-lookup peer table, lookup only once
                     write_data_stream_bytes(dst, curr_part->offset, curr_part->data, curr_part->size,
-                                            true, entry->data_stream.stream_id, entry->data_stream.stream_size,
-                                            route.routes[0], peers[route.routes[0].gateway_addr]);
+                                            true, entry->data_stream.stream_id, entry->data_stream.stream_size, 0, {},
+                                            route.routes[0], peer);
 
                     free(curr_part->data);
                     auto old_part = curr_part;
@@ -881,33 +910,6 @@ void Router::check_packet_cache(MeshProto::far_addr_t dst) {
 
         packet_cache.tx_cache.erase(cache_iter);
     }
-
-    /*auto cache_iter = packet_cache.cached_packets.find(dst);
-    if (cache_iter == packet_cache.cached_packets.end())
-        return;
-    auto packet_struct = cache_iter->second;
-    auto packet = &packet_struct;
-
-    if (routes[dst].state == RouteState::INEXISTING) {
-        while (packet) {
-            free(packet->data);
-            auto old_packet = packet;
-            packet = packet->next;
-            if (old_packet != &packet_struct)
-                free(old_packet);
-        }
-    }
-
-    if (routes[dst].state == RouteState::ESTABLISHED) {
-        while (packet) {
-            send_packet(packet->data, packet->size);
-            free(packet->data);
-            auto old_packet = packet;
-            packet = packet->next;
-            if (old_packet != &packet_struct)
-                free(old_packet);
-        }
-    }*/
 }
 
 void Router::check_packet_cache() {
@@ -918,46 +920,71 @@ void Router::check_packet_cache() {
 
     auto time = esp_timer_get_time();
 
-    for (auto& [identity, parts_list] : controller.data_parts_cache) {
-        auto part = &parts_list;
+    for (auto& [identity, cached_stream] : packet_cache.rx_stream_cache) {
+        DataStream* stream;
 
+        ubyte fake_stream_storage[sizeof(DataStream)]; // yes, destructor is not called
+
+        // looking up for stream or creating fake one if packets need to be deleted
         auto streams_iter = controller.data_streams.find(identity);
-        if (streams_iter == controller.data_streams.end())
-            continue;
-        auto& stream = streams_iter->second;
+        if (streams_iter == controller.data_streams.end()) {
+            if (!cached_stream.is_expired(time))
+                continue;
 
+            stream = (DataStream*) fake_stream_storage;
+            new (stream) DataStream(0, 0);
+        }
+        else
+            stream = &streams_iter->second;
+
+        auto part = &cached_stream.part;
+        stream->last_modif_timestamp = time;
+
+        // adding packets to stream and retransmitting, if they are broadcasts
         while (part) {
-            stream.add_data(part->offset, part->data, part->size);
-            stream.last_modif_timestamp = time;
+            auto res = stream->add_data(part->offset, part->data, part->size);
+
+            // retransmitting if broadcast
+            if (identity.dst_addr == BROADCAST_FAR_ADDR && res) {
+                for (auto [peer_addr, peer_info] : peers)
+                    write_data_stream_bytes(identity.dst_addr, part->offset, part->data, part->size, true,
+                                            identity.stream_id, 0, part->broadcast_ttl, identity.src_addr);
+            }
 
             free(part->data);
             auto old_part = part;
             part = part->next;
-            if (old_part != &parts_list)
+            if (old_part != &cached_stream.part)
                 free(old_part);
         }
 
-        check_stream_completeness(controller, identity, stream);
-        controller.data_parts_cache.erase(identity);
+        if (streams_iter == controller.data_streams.end()) {
+            stream->~DataStream(); // actually useless, because only does free(nullptr)
+        }
+        else {
+            check_stream_completeness(controller, identity, *stream);
+        }
+        packet_cache.rx_stream_cache.erase(identity);
     }
 }
 
 uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, const ubyte* data, uint size,
-                                     bool force_send, ubyte stream_id, uint stream_size) {
+                                     bool force_send, ubyte stream_id, uint stream_size, ubyte broadcast_ttl,
+                                     far_addr_t broadcast_src_addr) {
     if (dst == BROADCAST_FAR_ADDR) {
         Route tmp_route;
         tmp_route.distance = MeshController::DEFAULT_TTL;
         for (auto& [peer_addr, peer] : peers) {
             tmp_route.gateway_addr = peer_addr;
-            // todo keep the same src_addr and broadcast_id for all sends
-            return write_data_stream_bytes(dst, offset, data, size, force_send, stream_id, stream_size, tmp_route, peer);
+            return write_data_stream_bytes(dst, offset, data, size, force_send, stream_id, stream_size, broadcast_ttl,
+                                           broadcast_src_addr, tmp_route, peer);
         }
     }
 
     auto route = routes[dst];
 
     if (route.state == RouteState::ESTABLISHED) {
-        return write_data_stream_bytes(dst, offset, data, size, force_send, stream_id, stream_size,
+        return write_data_stream_bytes(dst, offset, data, size, force_send, stream_id, stream_size, 0, 0,
                                        route.routes[0], peers[route.routes[0].gateway_addr]);
     }
 
@@ -1010,7 +1037,7 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
 
         // found existing stream
         if (entry->type == CachedTxDataInfo::CachedDataType::DATA_STREAM) {
-            auto new_entry = (CachedDataStreamPart*) malloc(sizeof(CachedDataStreamPart));
+            auto new_entry = (CachedTxDataStreamPart*) malloc(sizeof(CachedTxDataStreamPart));
             *new_entry = entry->data_stream.part;
             entry->data_stream.part.next = new_entry;
 
@@ -1025,7 +1052,8 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
 }
 
 uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, const ubyte* data, uint size,
-                                     bool force_send, ubyte stream_id, uint stream_size, Route& route, Peer& peer) {
+                                     bool force_send, ubyte stream_id, uint stream_size, ubyte broadcast_ttl,
+                                     far_addr_t broadcast_src_addr, Route& route, Peer& peer) {
     auto gateway = route.gateway_addr;
     auto interface = peer.interface;
     auto interface_descr = controller.interfaces[interface->id];
@@ -1037,7 +1065,7 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
     //    return 0;
 
     // todo this ought to be allocated from pool allocator
-    // for far/optimized
+    // for far/optimized/broadcast
     MeshPacketType first_packet_type;
     MeshPacketType part_packet_type;
     MeshProto::DataStream* data_ptr;
@@ -1067,6 +1095,10 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
         first_packet_type = MeshPacketType::BROADCAST_DATA_FIRST;
         part_packet_type = MeshPacketType::BROADCAST_DATA_PART;
         data_ptr = &packet->bc_data;
+
+        memcpy(&packet->src_addr, &broadcast_src_addr, sizeof(far_addr_t));
+        memcpy(&packet->dst_addr, &dst, sizeof(far_addr_t));
+        packet->ttl = broadcast_ttl;
     }
     else {
         // common far otherwise
@@ -1100,15 +1132,6 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
         // here we can exit this function because there's not enough data to fill the entire packet
         if (send_size < mtu && !force_send)
             break;
-
-        // for far/optimized/broadcasts
-        if (dst == BROADCAST_FAR_ADDR) {
-            packet->broadcast_id = esp_random();
-            controller.last_broadcast_ids.contains_add(packet->broadcast_id);
-        }
-        else {
-            //
-        }
 
         // for first/part
         if (offset == 0) { // first packet
@@ -1158,51 +1181,67 @@ void Router::add_peer(MeshProto::far_addr_t peer, MeshInterface* interface) {
     stored.interface = interface;
 }
 
-void NsMeshController::DataStream::add_data(ushort offset, const ubyte* data, ushort size) {
+bool NsMeshController::DataStream::add_data(ushort offset, const ubyte* data, ushort size) {
     if ((uint) offset + size > stream_size)
-        return;
+        return false;
     if (!remake_parts(offset, offset + size))
-        return;
+        return false;
     memcpy(&stream_data[offset], data, size);
+    return true;
 }
 
 bool NsMeshController::DataStream::remake_parts(ushort start, ushort end) {
-    // todo work with parts
-    filled_bytes += end - start;
+    // code for adding new segment to collection of existing ones
+
+    bool begin_found = false, end_found = false;
+    ushort new_segment[2]{start, end}; // new segment boundaries. may extend if merged with existing segments
+
+    ushort new_collection[RECV_PAIR_CNT + 1][2];
+    uint new_collection_fill_level = 0;
 
     for (int i = 0; i < RECV_PAIR_CNT; ++i) {
-        //
+        if (recv_parts[i][0] == recv_parts[i][1])
+            break;
+
+        // setting lower boundary of new segment
+        if (recv_parts[i][0] <= start && start <= recv_parts[i][1]) {
+            begin_found = true;
+            new_segment[0] = recv_parts[i][0]; // merging with existing segment: changing lower boundary
+        }
+        else if (start < recv_parts[i][0] && !begin_found)
+            begin_found = true;
+
+        // adding existing part if it's not getting merged with new segment
+        if (begin_found == end_found)
+            memcpy(new_collection[new_collection_fill_level++], recv_parts[i], sizeof(recv_parts[i]));
+
+        // setting upper boundary of new segment. when upper boundary is found, lower boundary is always set, so adding new segment
+        if (recv_parts[i][0] <= end && end <= recv_parts[i][1]) {
+            end_found = true;
+            new_segment[1] = recv_parts[i][1]; // merging with existing segment: changing upper boundary
+            memcpy(new_collection[new_collection_fill_level++], new_segment, sizeof(new_segment));
+        }
+        else if (end < recv_parts[i][0] && !end_found) {
+            end_found = true;
+            memcpy(new_collection[new_collection_fill_level++], new_segment, sizeof(new_segment));
+        }
     }
 
+    // if reached end of existing segment collection, but didn't find the upper boundary
+    if (!end_found)
+        memcpy(new_collection[new_collection_fill_level++], new_segment, sizeof(new_segment));
+
+    // requires storing more segments than possible. error.
+    if (new_collection_fill_level > RECV_PAIR_CNT) {
+        return false;
+    }
+
+    // exiting if collection is not changed
+    if (!memcmp(recv_parts, new_collection, sizeof(recv_parts)))
+        return false;
+
+    memcpy(recv_parts, new_collection, sizeof(recv_parts));
     return true;
-
-    // start <= end always
-
-    for (int i = 0; i < RECV_PAIR_CNT; ++i) {
-        if (recv_parts[i][0] >= start && end >= recv_parts[i][1])
-            return true;
-        if (recv_parts[i][0] >= start && start >= recv_parts[i][1]) {
-            if (recv_parts[i][1] < end) {
-                filled_bytes += end - recv_parts[i][1];
-                recv_parts[i][1] = end;
-                return true;
-            }
-            else {
-                return false;
-            }
-        }
-        if (recv_parts[i][0] >= end && end >= recv_parts[i][1]) {
-            if (recv_parts[i][0] > start) {
-                filled_bytes += recv_parts[i][0] - start;
-                recv_parts[i][0] = start;
-                return true;
-            }
-            else {
-                return false;
-            }
-        }
-    }
-    return false;
 }
 
 void PacketCache::add_tx_packet(MeshProto::far_addr_t dst_addr, CachedTxStandalonePacket&& packet) {

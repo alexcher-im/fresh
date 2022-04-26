@@ -11,11 +11,10 @@ Currently, in a very raw state, barely supports:
 
 Needs to be done:
 * Insecure interface support
-* Better broadcasts (only for data stream packets) based on stream reshaping
 * Multi-MTU support
 * Combination of both secure and insecure interfaces on the same device
 * Removing devices and fixing routes
-* Encryption (only authentication is implemented right now)
+* Encryption (only authentication is implemented now)
 
 Task tracking is done via `todo`/`fixme` comments in the code.
 
@@ -33,7 +32,7 @@ void packet_handler(MeshProtocol::far_addr_t, const ubyte* data, uint size, void
 }
 
 void app_main() {
-    // it's better to not create interfaces and controller on stack because they can take up much mekory
+    // it's better to not create interfaces and controller on stack because they can take up much memory
     auto wifi_interface = new WifiEspNowMeshInterface();
     auto controller = new MeshController("network name", wifi_interface->derive_far_addr_uint32());
     
