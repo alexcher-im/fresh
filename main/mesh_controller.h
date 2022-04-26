@@ -173,6 +173,9 @@ namespace NsMeshController
 
         void check_packet_cache(MeshProto::far_addr_t dst);
 
+        decltype(packet_cache.tx_cache)::iterator check_packet_cache(
+                decltype(packet_cache.tx_cache)::iterator cache_iter, MeshProto::far_addr_t dst);
+
         void send_packet(MeshProto::MeshPacket* packet, uint size);
 
         void discover_route(MeshProto::far_addr_t dst);

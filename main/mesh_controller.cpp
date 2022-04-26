@@ -662,10 +662,11 @@ void MeshController::check_data_streams() {
 
         if (check_stream_completeness(*this, identity, stream))
             continue;
-        if (stream.is_expired(time, identity.dst_addr == BROADCAST_FAR_ADDR))
+        if (stream.is_expired(time, identity.dst_addr == BROADCAST_FAR_ADDR)) {
             i = data_streams.erase(i);
-        else
-            ++i;
+            continue;
+        }
+        ++i;
     }
 }
 
@@ -836,10 +837,8 @@ void Router::discover_route(far_addr_t dst) {
     free(far_ping);
 }
 
-void Router::check_packet_cache(MeshProto::far_addr_t dst) {
-    auto cache_iter = packet_cache.tx_cache.find(dst);
-    if (cache_iter == packet_cache.tx_cache.end())
-        return;
+decltype(Router::packet_cache.tx_cache)::iterator Router::check_packet_cache(
+        decltype(packet_cache.tx_cache)::iterator cache_iter, far_addr_t dst) {
     auto start_entry = &cache_iter->second;
     auto entry = start_entry;
 
@@ -876,8 +875,7 @@ void Router::check_packet_cache(MeshProto::far_addr_t dst) {
                 free(old_entry);
         }
 
-        packet_cache.tx_cache.erase(cache_iter);
-        return;
+        return packet_cache.tx_cache.erase(cache_iter);
     }
 
     if (route.state == RouteState::INSPECTING &&
@@ -908,19 +906,32 @@ void Router::check_packet_cache(MeshProto::far_addr_t dst) {
                 free(old_entry);
         }
 
-        packet_cache.tx_cache.erase(cache_iter);
+        return packet_cache.tx_cache.erase(cache_iter);
     }
+
+    return ++cache_iter;
+}
+
+void Router::check_packet_cache(far_addr_t dst) {
+    auto cache_iter = packet_cache.tx_cache.find(dst);
+    if (cache_iter == packet_cache.tx_cache.end())
+        return;
+    check_packet_cache(cache_iter, dst);
 }
 
 void Router::check_packet_cache() {
-    // todo optimize this
-    for (auto& [key, value] : packet_cache.tx_cache) {
-        check_packet_cache(key);
+    // tx cache
+    for (auto i = packet_cache.tx_cache.begin(); i != packet_cache.tx_cache.end();) {
+        i = check_packet_cache(i, i->first);
     }
 
     auto time = esp_timer_get_time();
 
-    for (auto& [identity, cached_stream] : packet_cache.rx_stream_cache) {
+    // rx stream cache
+    for (auto i = packet_cache.rx_stream_cache.begin(); i != packet_cache.rx_stream_cache.end();) {
+        auto& identity = i->first;
+        auto& cached_stream = i->second;
+
         DataStream* stream;
 
         ubyte fake_stream_storage[sizeof(DataStream)]; // yes, destructor is not called
@@ -928,8 +939,10 @@ void Router::check_packet_cache() {
         // looking up for stream or creating fake one if packets need to be deleted
         auto streams_iter = controller.data_streams.find(identity);
         if (streams_iter == controller.data_streams.end()) {
-            if (!cached_stream.is_expired(time))
+            if (!cached_stream.is_expired(time)) {
+                ++i;
                 continue;
+            }
 
             stream = (DataStream*) fake_stream_storage;
             new (stream) DataStream(0, 0);
@@ -964,7 +977,7 @@ void Router::check_packet_cache() {
         else {
             check_stream_completeness(controller, identity, *stream);
         }
-        packet_cache.rx_stream_cache.erase(identity);
+        i = packet_cache.rx_stream_cache.erase(i);
     }
 }
 
