@@ -82,7 +82,7 @@ static void aes_hash(const ubyte* buf, uint size, ubyte* hash_write, ubyte key[1
 
 #include "chacha20.h"
 
-static uint chacha20_init_vector[16];
+static uint chacha20_init_vector[16]; // this must be filled with non-random static data before calling chacha20_hash_manual()
 
 // warning: NOT a cryptographic hash:
 //  padding sucks, attacker can lengthen a message within one block
@@ -92,7 +92,7 @@ static uint chacha20_init_vector[16];
 //  if no padding required, add a new empty block and hash it
 //  add a final iteration of chacha20_process_block() on a modified (NOT XOR-ED!) hashdigest
 
-// also a nice thing will be to zero-out the stack memory before exiting this function, but not required right now
+// also a nice thing will be to zero-out the stack memory before exiting this function, but not required in this environment
 
 // write: 64 bytes
 static void chacha20_hash_manual(const ubyte* buf, uint size, ubyte* hash_write) {
