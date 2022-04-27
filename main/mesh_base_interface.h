@@ -5,49 +5,6 @@
 #include "mesh_base_interface_session.h"
 
 
-/*struct MeshInterfaceProps
-{
-    ushort mtu;
-    bool requires_encryption;
-};
-
-
-struct PeerSecureSessionEstablishmentInfo;
-union PeerInterfaceInfo;
-
-
-class BaseInterfaceSessionManager
-{
-public:
-    virtual PeerInterfaceInfo* get_or_create_session(void* phy_addr) = 0;
-
-    virtual PeerInterfaceInfo* get_or_none_session(void* phy_addr) = 0;
-
-    virtual void remove_session(void* phy_addr) = 0;
-
-    virtual PeerSecureSessionEstablishmentInfo* get_or_create_est_session(void* phy_addr) = 0;
-
-    virtual PeerSecureSessionEstablishmentInfo* get_or_none_est_session(void* phy_addr) = 0;
-
-    virtual void remove_est_session(void* phy_addr) = 0;
-};
-
-
-class BaseMeshInterface
-{
-public:
-    virtual void check_packets() = 0;
-
-    virtual void send_packet(MeshProto::far_addr_t far_addr, MeshProto::MeshPacket* packet, uint size) = 0;
-
-    virtual void on_near_packet(MeshProto::MeshPacket* packet, uint size) = 0;
-
-    virtual void send_phy() = 0;
-
-    virtual MeshInterfaceProps get_properties() = 0;
-};*/
-
-
 struct MeshInterfaceProps
 {
     MeshInterfaceSessionManager* sessions;

@@ -20,15 +20,20 @@ Task tracking is done via `todo`/`fixme` comments in the code.
 
 For more details about the protocol, check [mesh_protocol.h](main/mesh_protocol.h).
 
-## Usage
+## Usage (C++)
 ```c++
-#include "mesh_protocol.h"
 #include "mesh_controller.h"
 #include "interfaces/wifi_esp_now_interface.h"
 
 
-void packet_handler(MeshProtocol::far_addr_t, const ubyte* data, uint size, void* userdata) {
+// lambda + std::function WIP
+void packet_handler(MeshProtocol::far_addr_t src_addr, const ubyte* data, uint size, void* userdata) {
     printf("Hello packet!\n");
+    
+    // sending response. builders are used to send large amount of data using many small chunks
+    const char response_data[] = "hello!";
+    MeshStreamBuilder builder((MeshController*) userdata, src_addr, sizeof(response_data));
+    builder.write(response_data, sizeof(response_data));
 }
 
 void app_main() {
@@ -36,8 +41,9 @@ void app_main() {
     auto wifi_interface = new WifiEspNowMeshInterface();
     auto controller = new MeshController("network name", wifi_interface->derive_far_addr_uint32());
     
+    controller->user_stream_handler_userdata = controller; // will be passed to packet_handler()
     controller->user_stream_handler = packet_handler;
-    controller->set_psk_password("network pass");
+    controller->set_psk_password("network pass"); // make sure to call this before any .add_interface()
     controller->add_interface(wifi_interface);
     
     vTaskDelay(-1);

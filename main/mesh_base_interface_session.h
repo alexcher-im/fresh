@@ -7,7 +7,6 @@
 enum class PeerSecureSessionEstablishmentStage
 {
     UNKNOWN = 0,
-    WAITING_FOR_HELLO_INIT,
     WAITING_FOR_HELLO_AUTH,
     WAITING_FOR_HELLO_JOINED
 };
@@ -42,7 +41,7 @@ struct PeerSecureSessionEstablishmentInfo
     PeerInterfaceInfoSecure session_info;
     PeerSecureSessionEstablishmentStage stage = PeerSecureSessionEstablishmentStage::UNKNOWN;
 
-    static const u64 SESSION_MAX_LIVE_TIME = 2000000;
+    static const u64 SESSION_MAX_LIVE_TIME = 2000000;  // todo make use of this value
 };
 
 

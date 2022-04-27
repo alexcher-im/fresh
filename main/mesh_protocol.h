@@ -31,6 +31,7 @@ namespace MeshProto
         // through trusted environment (that does not require encryption)
 
         // todo add a special 2-bit payload for data packets in their types
+        // todo make broadcasts just a FAR packet with dst_addr=BROADCAST_FAR_ADDR, not a special packet type
 
         // a unicast far packet
         FAR_DATA_FIRST,
@@ -239,54 +240,6 @@ namespace MeshProto
 #define MESH_CALC_SIZE(field_name) (uint) (uintptr_t) (&((::MeshProto::MeshPacket*) nullptr)->field_name + 1)
 #define MESH_FIELD_ACCESSIBLE(field_name, size) ((uintptr_t) (&((::MeshProto::MeshPacket*) nullptr)->field_name + 1) <= (size))
 #define MESH_SECURE_PACKET_OVERHEAD (sizeof(MessageSign))
-
-    /*union FarPacket
-    {
-        PacketFarDataFirst data_first;
-        PacketFarDataPart8 data_part_8;
-        PacketFarDataPart16 data_part_16;
-    };
-
-    struct UnprotectedPacket
-    {
-        MeshPacketType type;
-
-        union {
-            ubyte near_packet[0];
-            FarPacket far_unicast;
-            struct {
-                uint broadcast_id;
-                FarPacket far_broadcast;
-            };
-        };
-    };
-
-    struct MeshPacket
-    {
-        MeshPacketType type;
-
-        union {
-            ubyte near_packet[0];
-            FarPacket far_unicast;
-            struct {
-                uint broadcast_id;
-                FarPacket far_broadcast;
-            };
-        };
-
-        struct {
-            u64 timestamp;
-            mesh_hashdigest_t sign; // crc32 of (headers_len(ubyte), headers, pre-shared key hash, peer nonce, timestamp)
-        };
-    };*/
 }
 
 #pragma pack(pop)
-
-
-//namespace std {
-//    template<>
-//    struct hash<std::enable_if<decltype(MeshProto::func(nullptr))::value, MeshProto::far_addr_t>::type> {
-//        //
-//    }
-//}

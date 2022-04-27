@@ -986,7 +986,6 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
                                      far_addr_t broadcast_src_addr) {
     if (dst == BROADCAST_FAR_ADDR) {
         Route tmp_route;
-        tmp_route.distance = MeshController::DEFAULT_TTL;
         for (auto& [peer_addr, peer] : peers) {
             tmp_route.gateway_addr = peer_addr;
             return write_data_stream_bytes(dst, offset, data, size, force_send, stream_id, stream_size, broadcast_ttl,

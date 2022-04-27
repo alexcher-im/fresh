@@ -1,15 +1,9 @@
 #include <stdio.h>
 #include <nvs_flash.h>
-#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
-#include "esp_spi_flash.h"
-#include "esp_bt.h"
-//#include "esp_nimble_hci.h"
 #include "hashes.h"
-
-void bt_test();
 
 
 void benchmark_crypto(uint rand_size, uint iter_count) {
@@ -100,8 +94,6 @@ void start_mesh();
 
 void app_main(void)
 {
-    printf("Hello world!\n");
-
     start_mesh();
     return;
 
@@ -113,26 +105,6 @@ void app_main(void)
     benchmark_crypto(4096, 10000);
     benchmark_crypto(16536, 10000);
     benchmark_crypto(65536, 10000);
-
-    esp_err_t ret = nvs_flash_init();
-    if  (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-    esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-
-    if ((ret = esp_bt_controller_init(&bt_cfg)) != ESP_OK) {
-        printf("error: esp_bt_controller_init\n");
-    }
-
-    if ((ret = esp_bt_controller_enable(ESP_BT_MODE_BLE)) != ESP_OK) {
-        printf("error: esp_bt_controller_enable\n");
-    }
-
-    bt_test();
 
     /* Print chip information */
     esp_chip_info_t chip_info;

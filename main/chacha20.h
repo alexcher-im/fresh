@@ -1,4 +1,4 @@
-// modified version of https://github.com/Ginurx/chacha20-c
+// based on https://github.com/Ginurx/chacha20-c
 
 #pragma once
 
