@@ -31,15 +31,11 @@ namespace MeshProto
         // through trusted environment (that does not require encryption)
 
         // todo add a special 2-bit payload for data packets in their types
-        // todo make broadcasts just a FAR packet with dst_addr=BROADCAST_FAR_ADDR, not a special packet type
 
         // a unicast far packet
         FAR_DATA_FIRST,
         FAR_DATA_PART,
-        // a broadcast far packet
-        BROADCAST_DATA_FIRST,
-        BROADCAST_DATA_PART,
-        // an optimized far data packet, so it does not contain any far headers and is directed to the RX device
+        // a far data packet without far packet headers, directed to the RX device
         FAR_OPTIMIZED_DATA_FIRST,
         FAR_OPTIMIZED_DATA_PART,
 
