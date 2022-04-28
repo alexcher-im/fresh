@@ -509,36 +509,6 @@ void IRAM_ATTR MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_a
     memcpy(&src, &packet->src_addr, sizeof(far_addr_t)); // memcpy because packet memory can be unaligned
     memcpy(&dst, &packet->dst_addr, sizeof(far_addr_t));
 
-    if (packet->type == MeshPacketType::BROADCAST_DATA_FIRST) {
-        if (!MESH_FIELD_ACCESSIBLE(bc_data.first, size))
-            return;
-        if (dst != BROADCAST_FAR_ADDR)
-            return;
-        // todo add ttl check here and in far data packets
-        //if (!--packet->ttl)
-        //    return;
-
-        auto payload_size = size - MESH_CALC_SIZE(bc_data.first.payload);
-        if (handle_data_first_packet(*this, &packet->bc_data.first, payload_size, src, dst))
-            retransmit_broadcast(*this, packet, size, payload_size, 0, src);
-        return;
-    }
-
-    if (packet->type == MeshProto::MeshPacketType::BROADCAST_DATA_PART) {
-        if (!MESH_FIELD_ACCESSIBLE(bc_data.part_8, size))
-            return;
-        if (dst != BROADCAST_FAR_ADDR)
-            return;
-
-        ushort offset;
-        memcpy(&offset, &packet->bc_data.part_8.offset, sizeof(ushort));
-
-        auto payload_size = size - MESH_CALC_SIZE(bc_data.part_8.payload);
-        if (handle_data_part_packet(*this, &packet->bc_data.part_8, payload_size, src, dst))
-            retransmit_broadcast(*this, packet, size, payload_size, offset, src);
-        return;
-    }
-
     if (src == self_addr)
         return;
 
@@ -574,7 +544,7 @@ void IRAM_ATTR MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_a
     }
 
     // retransmitting packet
-    if (dst != self_addr) {
+    if (dst != self_addr && dst != BROADCAST_FAR_ADDR) {
         if (!--packet->ttl)
             return;
         // fixme may get out of bounds if packet got from insecure interface
@@ -593,18 +563,28 @@ void IRAM_ATTR MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_a
     if (packet->type == MeshPacketType::FAR_DATA_FIRST) {
         if (!MESH_FIELD_ACCESSIBLE(far_data.first, size))
             return;
+        if (!--packet->ttl)
+            return;
 
         auto payload_size = size - MESH_CALC_SIZE(far_data.first.payload);
-        handle_data_first_packet(*this, &packet->far_data.first, payload_size, src, dst);
+        if (handle_data_first_packet(*this, &packet->far_data.first, payload_size, src, dst) && dst == BROADCAST_FAR_ADDR) {
+            retransmit_broadcast(*this, packet, size, payload_size, 0, src);
+        }
         return;
     }
 
     if (packet->type == MeshPacketType::FAR_DATA_PART) {
         if (!MESH_FIELD_ACCESSIBLE(far_data.part_8, size))
             return;
+        if (!--packet->ttl)
+            return;
 
         auto payload_size = size - MESH_CALC_SIZE(far_data.part_8.payload);
-        handle_data_part_packet(*this, &packet->far_data.part_8, payload_size, src, dst);
+        if (handle_data_part_packet(*this, &packet->far_data.part_8, payload_size, src, dst) && dst == BROADCAST_FAR_ADDR) {
+            ushort offset;
+            memcpy(&offset, &packet->bc_data.part_8.offset, sizeof(ushort));
+            retransmit_broadcast(*this, packet, size, payload_size, offset, src);
+        }
         return;
     }
 }
@@ -1096,22 +1076,22 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
         part_packet_type = MeshPacketType::FAR_OPTIMIZED_DATA_PART;
         data_ptr = &packet->opt_data;
     }
-    else if (dst == BROADCAST_FAR_ADDR) {
-        // maybe broadcast far?
-        packet = (MeshPacket*) malloc(
-                std::min((size_t) mtu, size +
-                std::max(offsetof(MeshPacket, bc_data.part_8.payload),
-                         (offset == 0 ? offsetof(MeshPacket, bc_data.first.payload) : 0)) +
-                (interface_descr.is_secured ? MESH_SECURE_PACKET_OVERHEAD : 0)));
-
-        first_packet_type = MeshPacketType::BROADCAST_DATA_FIRST;
-        part_packet_type = MeshPacketType::BROADCAST_DATA_PART;
-        data_ptr = &packet->bc_data;
-
-        memcpy(&packet->src_addr, &broadcast_src_addr, sizeof(far_addr_t));
-        memcpy(&packet->dst_addr, &dst, sizeof(far_addr_t));
-        packet->ttl = broadcast_ttl;
-    }
+    //else if (dst == BROADCAST_FAR_ADDR) {
+    //    // maybe broadcast far?
+    //    packet = (MeshPacket*) malloc(
+    //            std::min((size_t) mtu, size +
+    //            std::max(offsetof(MeshPacket, far_data.part_8.payload),
+    //                     (offset == 0 ? offsetof(MeshPacket, far_data.first.payload) : 0)) +
+    //            (interface_descr.is_secured ? MESH_SECURE_PACKET_OVERHEAD : 0)));
+    //
+    //    first_packet_type = MeshPacketType::FAR_DATA_FIRST;
+    //    part_packet_type = MeshPacketType::FAR_DATA_PART;
+    //    data_ptr = &packet->far_data;
+    //
+    //    memcpy(&packet->src_addr, &broadcast_src_addr, sizeof(far_addr_t));
+    //    memcpy(&packet->dst_addr, &dst, sizeof(far_addr_t));
+    //    packet->ttl = broadcast_ttl;
+    //}
     else {
         // common far otherwise
         packet = (MeshPacket*) malloc(
@@ -1124,9 +1104,9 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
         part_packet_type = MeshPacketType::FAR_DATA_PART;
         data_ptr = &packet->far_data;
 
-        memcpy(&packet->src_addr, &controller.self_addr, sizeof(far_addr_t));
+        memcpy(&packet->src_addr, dst == BROADCAST_FAR_ADDR ? &broadcast_src_addr : &controller.self_addr, sizeof(far_addr_t));
         memcpy(&packet->dst_addr, &dst, sizeof(far_addr_t));
-        packet->ttl = route.distance + 1;
+        packet->ttl = dst == BROADCAST_FAR_ADDR ? broadcast_ttl : route.distance + 1;
     }
 
     auto data_offset = (ubyte*) data_ptr - (ubyte*) packet;
