@@ -3,7 +3,7 @@
 
 decltype(MeshProto::PacketFarDataFirst::stream_id) MeshStreamBuilder::g_stream_id = 0;
 
-MeshStreamBuilder::MeshStreamBuilder(MeshController& controller_, uint size, MeshProto::far_addr_t dst_addr_) : stream_size(size),
+MeshStreamBuilder::MeshStreamBuilder(MeshController& controller_, MeshProto::far_addr_t dst_addr_, uint size) : stream_size(size),
 dst_addr(dst_addr_), controller(controller_), stream_id(g_stream_id++), cache((ubyte*) malloc(0)) {
     //
 }
