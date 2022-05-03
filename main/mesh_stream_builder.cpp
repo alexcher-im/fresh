@@ -8,7 +8,8 @@ dst_addr(dst_addr_), controller(controller_), stream_id(g_stream_id++), cache((u
     //
 }
 
-void MeshStreamBuilder::write(const ubyte* data, uint size) {
+void MeshStreamBuilder::write(const void* data_, uint size) {
+    auto data = (const ubyte*) data_;
     uint sent;
 
     if (!cache_fill) {

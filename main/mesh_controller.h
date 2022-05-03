@@ -6,6 +6,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <bitset>
+#include <functional>
 #include "mesh_protocol.h"
 #include "mesh_base_interface.h"
 #include "utils.h"
@@ -251,8 +252,7 @@ public:
     xTaskHandle check_packets_task_handle;
     std::unordered_map<NsMeshController::DataStreamIdentity, NsMeshController::DataStream> data_streams; // this should be in Router
 
-    void (*user_stream_handler)(MeshProto::far_addr_t, const ubyte*, ushort, void*) = default_stream_handler;
-    void* user_stream_handler_userdata = nullptr;
+    std::function<void(MeshProto::far_addr_t, const ubyte*, ushort)> user_stream_handler = default_stream_handler;
 
     MeshController(const char* netname, MeshProto::far_addr_t self_addr_);
 
@@ -281,7 +281,7 @@ public:
 protected:
     void check_data_streams();
 
-    static void default_stream_handler(MeshProto::far_addr_t src_addr, const ubyte* data, ushort size, void* userdata) {
+    static void default_stream_handler(MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
         printf("Received a data stream!\n");
     }
 };
