@@ -15,6 +15,7 @@ Needs to be done:
 * Combination of both secure and insecure interfaces on the same device
 * Removing devices and fixing routes
 * Encryption (only authentication is implemented now)
+* Proper synchronization to prevent data races
 
 Task tracking is done via `todo`/`fixme` comments in the code.
 
@@ -41,12 +42,9 @@ void app_main() {
     auto wifi_interface = new WifiEspNowMeshInterface();
     auto controller = new MeshController("network name", wifi_interface->derive_far_addr_uint32());
     
-    controller->user_stream_handler_userdata = controller; // will be passed to packet_handler()
-    controller->user_stream_handler = packet_handler;
-    
     // packet callback
     controller->user_stream_handler = [controller](MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
-        printf("Hello packet!");
+        printf("Hello packet!\n");
 
         // sending response. builders are used to send large amount of data using many small chunks
         const char response_data[] = "hello!";
