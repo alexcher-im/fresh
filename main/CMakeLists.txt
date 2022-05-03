@@ -1,12 +1,17 @@
-#file(GLOB MESH_PATH "*/*.cpp" "*/*.c")
-##file(GLOB, MESH_INTERFACES_PATH, "interfaces/*.cpp", "interfaces/*.c")
-#
-#idf_component_register(SRCS ${MESH_PATH}
-#        "")
-
 set(CMAKE_CXX_STANDARD 20)
 
-idf_component_register(SRCS "hello_world_main.c"
-        "mesh_controller.cpp" "interfaces/wifi_esp_now_interface.cpp"
-        "mesh_stream_builder.cpp"
-        "")
+if (NOT DEFINED FRESH_SOURCE_DIR)
+    set(FRESH_SOURCE_DIR ".")
+endif()
+
+file(GLOB_RECURSE FRESH_SRCS
+        ${FRESH_SOURCE_DIR}/*.cpp
+        ${FRESH_SOURCE_DIR}/*.c
+        ${FRESH_SOURCE_DIR}/*.h
+        ${FRESH_SOURCE_DIR}/.hpp)
+
+idf_component_register(
+        SRCS ${FRESH_SRCS}
+        INCLUDE_DIRS ${FRESH_SOURCE_DIR} ${FRESH_SOURCE_DIR}/interfaces
+        REQUIRES nvs_flash mbedtls libsodium
+)

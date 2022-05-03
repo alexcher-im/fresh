@@ -21,7 +21,7 @@ public:
 
     MeshStreamBuilder(MeshController& controller_, uint size, MeshProto::far_addr_t dst_addr_);
 
-    void write(const ubyte* data, uint size);
+    void write(const void* data, uint size);
 
     ~MeshStreamBuilder();
 };

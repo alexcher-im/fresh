@@ -55,17 +55,16 @@ struct CompletedStreamInfo
     MeshController* controller;
 };
 
-static void handle_packet(CompletedStreamInfo info) {
-    printf("got a finished stream from %d, %d bytes\n", info.src_addr, info.size);
+static void handle_packet(MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
+    printf("got a finished stream from %d, %d bytes\n", src_addr, size);
     fflush(stdout);
-    printf("%s\n", info.data);
+    printf("%s\n", data);
     fflush(stdout);
 }
 
 static void task_handle_packet(void* userdata) {
     auto info = (CompletedStreamInfo*) userdata;
-    handle_packet(*info);
-    info->controller->user_stream_handler(info->src_addr, info->data, info->size, info->controller->user_stream_handler_userdata);
+    info->controller->user_stream_handler(info->src_addr, info->data, info->size);
     free(info->data);
     free(info);
     vTaskDelete(nullptr);
@@ -655,6 +654,20 @@ extern "C" void start_mesh() {
     auto wifi_interface = new WifiEspNowMeshInterface();
     auto controller = new MeshController("alexcher&ameharu", wifi_interface->derive_far_addr_uint32());
     controller->set_psk_password("dev network");
+    controller->user_stream_handler = handle_packet;
+    //controller->user_stream_handler = [](MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
+    //    printf("Hello packet!");
+    //};
+
+    //controller->user_stream_handler = [controller](MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
+    //    printf("Hello packet!");
+//
+    //    // sending response. builders are used to send large amount of data using many small chunks
+    //    const char response_data[] = "hello!";
+    //    MeshStreamBuilder builder(*controller, src_addr, sizeof(response_data));
+    //    builder.write(response_data, sizeof(response_data));
+    //};
+
     controller->add_interface(wifi_interface);
 
     printf("mesh started; sizeof(MeshController)=%d\n", (int) sizeof(MeshController));
@@ -670,7 +683,12 @@ extern "C" void start_mesh() {
             dst_addr = far;
         dst_addr = BROADCAST_FAR_ADDR;
 
-        auto lorem = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus sodales euismod dolor. Maecenas condimentum erat urna, vel consequat arcu hendrerit sit amet. Curabitur justo nunc, euismod id nisi a, tincidunt eleifend ante. Vestibulum nec justo vel nisi consequat condimentum. Curabitur nec nulla ac orci tempus commodo. Donec molestie euismod ante, in efficitur lorem posuere et. Curabitur euismod eleifend lectus et vestibulum. Nunc non mauris id leo tristique sollicitudin a eget turpis.";
+        auto lorem = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus sodales euismod dolor. Maecenas "
+                     "condimentum erat urna, vel consequat arcu hendrerit sit amet. Curabitur justo nunc, euismod id "
+                     "nisi a, tincidunt eleifend ante. Vestibulum nec justo vel nisi consequat condimentum. Curabitur "
+                     "nec nulla ac orci tempus commodo. Donec molestie euismod ante, in efficitur lorem posuere et. "
+                     "Curabitur euismod eleifend lectus et vestibulum. Nunc non mauris id leo tristique sollicitudin "
+                     "a eget turpis.";
 
         MeshStreamBuilder builder(*controller, strlen(lorem) + 1, dst_addr);
         builder.write((ubyte*) lorem, strlen(lorem) + 1);
