@@ -19,7 +19,7 @@ public:
 
     static decltype(MeshProto::PacketFarDataFirst::stream_id) g_stream_id;
 
-    MeshStreamBuilder(MeshController& controller_, uint size, MeshProto::far_addr_t dst_addr_);
+    MeshStreamBuilder(MeshController& controller_, MeshProto::far_addr_t dst_addr_, uint size);
 
     void write(const void* data, uint size);
 

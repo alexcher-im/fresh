@@ -690,7 +690,7 @@ extern "C" void start_mesh() {
                      "Curabitur euismod eleifend lectus et vestibulum. Nunc non mauris id leo tristique sollicitudin "
                      "a eget turpis.";
 
-        MeshStreamBuilder builder(*controller, strlen(lorem) + 1, dst_addr);
+        MeshStreamBuilder builder(*controller, dst_addr, strlen(lorem) + 1);
         builder.write((ubyte*) lorem, strlen(lorem) + 1);
     }
 
