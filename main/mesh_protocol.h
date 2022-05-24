@@ -93,7 +93,7 @@ namespace MeshProto
     {
         ubyte network_name[16];
         ubyte interface_payload[0];
-    };// __attribute__((packed));
+    };
 
     // response to HELLO packet, from network member to client
     // initiates a secure session establishment
@@ -101,7 +101,7 @@ namespace MeshProto
     {
         nonce_t member_nonce; // this does not require any signing/protection
         ubyte interface_payload[0];
-    } __attribute__((packed));
+    };
 
     // response to HELLO_INIT packet, from client to network member
     // informs a network member that client knows the PSK
@@ -114,7 +114,7 @@ namespace MeshProto
         far_addr_t self_far_addr;
         hashdigest_t hash; // packet sign with PSK (hash of all fields, concatenated with PSK)
         ubyte interface_payload[0];
-    } __attribute__((packed));
+    };
 
     // response to HELLO_AUTHORIZE packet, from network member to client
     // informs a client that authorization succeeded, also proves that network member knows the PSK as well
@@ -126,7 +126,7 @@ namespace MeshProto
         far_addr_t self_far_addr;
         hashdigest_t hash; // packet sign with PSK+session_key
         ubyte interface_payload[0];
-    } __attribute__((packed));
+    };
 
     // insecure mesh join
     struct PacketNearHelloInsecure
@@ -134,13 +134,13 @@ namespace MeshProto
         ubyte network_name[16];
         far_addr_t self_far_addr;
         ubyte interface_payload[0];
-    } __attribute__((packed));
+    };
 
     struct PacketNearHelloJoinedInsecure
     {
         far_addr_t self_far_addr;
         ubyte interface_payload[0];
-    } __attribute__((packed));
+    };
 
     // other packets
     struct PacketFarPing
@@ -149,47 +149,47 @@ namespace MeshProto
         // mtu discovery data:
         ubyte router_num_with_min_mtu;
         ushort min_mtu;
-    } __attribute__((packed));
+    };
 
     struct PacketFarPingResponse : public PacketFarPing
     {
         //
-    } __attribute__((packed));
+    };
 
     struct PacketFarDataFirst
     {
         ubyte stream_id;
         ushort stream_size;
         ubyte payload[0];
-    } __attribute__((packed));
+    };
 
     struct PacketFarDataPart8
     {
         ubyte stream_id;
         ushort offset;
         ubyte payload[0];
-    } __attribute__((packed));
+    };
 
     struct PacketFarDataPart16
     {
         ubyte stream_id;
         ushort offset;
         ubyte payload[0];
-    } __attribute__((packed));
+    };
 
     union DataStream
     {
         PacketFarDataFirst first;
         PacketFarDataPart8 part_8;
         //PacketFarDataPart16 part_16;
-    } __attribute__((packed));
+    };
 
     struct MessageSign
     {
         timestamp_t timestamp;
         session_key_t session_key;
         hashdigest_t hash;
-    } __attribute__((packed));
+    };
 
     struct MeshPacket
     {
@@ -227,11 +227,13 @@ namespace MeshProto
                         uint broadcast_id;
 
                         DataStream bc_data;
-                    } __attribute__((packed));
-                } __attribute__((packed));
-            } __attribute__((packed));
-        } __attribute__((packed));
-    } __attribute__((packed));
+                    };
+                };
+            };
+        };
+
+        MeshPacket() = delete;
+    };
 
 #define MESH_CALC_SIZE(field_name) (uint) (uintptr_t) (&((::MeshProto::MeshPacket*) nullptr)->field_name + 1)
 #define MESH_FIELD_ACCESSIBLE(field_name, size) ((uintptr_t) (&((::MeshProto::MeshPacket*) nullptr)->field_name + 1) <= (size))

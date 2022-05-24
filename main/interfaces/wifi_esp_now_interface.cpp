@@ -188,11 +188,11 @@ void WifiEspNowMeshInterface::send_hello(MeshPhyAddrPtr phy_addr) {
     if (phy_addr == nullptr)
         phy_addr = (MeshPhyAddrPtr) BROADCAST_MAC;
 
-    MeshPacket packet;
-    packet.type = MeshPacketType::NEAR_HELLO;
-    memcpy(packet.near_hello_secure.network_name, controller->network_name, sizeof(controller->network_name));
+    auto packet = (MeshPacket*) alloca(MESH_CALC_SIZE(near_hello_secure));
+    packet->type = MeshPacketType::NEAR_HELLO;
+    memcpy(packet->near_hello_secure.network_name, controller->network_name, sizeof(controller->network_name));
 
-    send_packet(phy_addr, &packet, MESH_CALC_SIZE(near_hello_secure));
+    send_packet(phy_addr, packet, MESH_CALC_SIZE(near_hello_secure));
 }
 
 void WifiEspNowMeshInterface::write_addr_bytes(MeshPhyAddrPtr phy_addr, void* out_buf) {
