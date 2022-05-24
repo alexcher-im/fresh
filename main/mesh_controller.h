@@ -138,13 +138,11 @@ namespace NsMeshController
 
     struct CachedRxDataInfo
     {
-        static const u64 EXPIRATION_TIME = 5'000'000;
-
         u64 last_modif_timestamp;
         CachedRxDataStreamPart part;
 
         bool is_expired(u64 new_time) {
-            return new_time > last_modif_timestamp + EXPIRATION_TIME;
+            return new_time > last_modif_timestamp + MAX_RX_CACHE_ENTRY_LIVE_TIME;
         }
     };
 
@@ -174,8 +172,8 @@ namespace NsMeshController
 
         void check_packet_cache(MeshProto::far_addr_t dst);
 
-        decltype(packet_cache.tx_cache)::iterator check_packet_cache(
-                decltype(packet_cache.tx_cache)::iterator cache_iter, MeshProto::far_addr_t dst);
+        auto check_packet_cache(decltype(packet_cache.tx_cache)::iterator cache_iter, MeshProto::far_addr_t dst)
+                -> decltype(packet_cache.tx_cache)::iterator;
 
         void send_packet(MeshProto::MeshPacket* packet, uint size);
 
@@ -199,13 +197,9 @@ namespace NsMeshController
     class DataStream
     {
     public:
-        static const int RECV_PAIR_CNT = 8;
-        static const u64 MAX_PACKET_WAIT = 3'000'000; // in microseconds
-        static const u64 BROADCAST_KEEP_TIME = 5'000'000;
-
         ubyte* stream_data;
         uint stream_size;
-        ushort recv_parts[RECV_PAIR_CNT][2]{};
+        ushort recv_parts[DATA_STREAM_RECV_PAIR_CNT][2]{};
         u64 last_modif_timestamp;
 
         DataStream(uint size, u64 creation_time) : stream_data(size ? (ubyte*) malloc(size) : nullptr), stream_size(size),
@@ -220,7 +214,7 @@ namespace NsMeshController
         }
 
         bool is_expired(u64 timestamp, bool is_broadcast = false) const {
-            return timestamp > last_modif_timestamp + (is_broadcast ? BROADCAST_KEEP_TIME : MAX_PACKET_WAIT);
+            return timestamp > last_modif_timestamp + (is_broadcast ? DATA_STREAM_BROADCAST_KEEP_TIME : DATA_STREAM_MAX_PACKET_WAIT);
         }
 
         ~DataStream() {
@@ -236,14 +230,6 @@ namespace NsMeshController
 class MeshController
 {
 public:
-    static const int CHECK_PACKETS_TASK_STACK_SIZE = 4096;
-    static const int CHECK_PACKETS_TASK_PRIORITY = -7;
-    static const BaseType_t CHECK_PACKETS_TASK_AFFINITY = tskNO_AFFINITY;
-    static const int HANDLE_PACKET_TASK_STACK_SIZE = 8192;
-    static const int HANDLE_PACKET_TASK_PRIORITY = -9;
-    static const BaseType_t HANDLE_PACKET_TASK_AFFINITY = tskNO_AFFINITY;
-    static const int DEFAULT_TTL = 5;
-
     ubyte network_name[16];
     ubyte pre_shared_key[16];
     std::vector<NsMeshController::InterfaceInternalParams> interfaces;

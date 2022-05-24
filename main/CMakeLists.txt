@@ -1,5 +1,3 @@
-set(CMAKE_CXX_STANDARD 20)
-
 set(FRESH_EXCLUDE_MAIN true)
 if (NOT DEFINED FRESH_SOURCE_DIR) # if compiling as standalone project
     set(FRESH_SOURCE_DIR ".")
@@ -21,3 +19,5 @@ idf_component_register(
         INCLUDE_DIRS ${FRESH_SOURCE_DIR} ${FRESH_SOURCE_DIR}/interfaces
         REQUIRES nvs_flash mbedtls libsodium
 )
+
+set_target_properties(${COMPONENT_LIB} PROPERTIES CXX_STANDARD 20)

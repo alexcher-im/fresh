@@ -14,7 +14,7 @@
 
 
 // write: 4 bytes
-static void crc32(ubyte* buf, uint size, ubyte* hash_write) {
+inline void crc32(ubyte* buf, uint size, ubyte* hash_write) {
     uint crc = 0xFFFFFFFF;
 
     for (int i = 0; i < size; ++i) {
@@ -30,7 +30,7 @@ static void crc32(ubyte* buf, uint size, ubyte* hash_write) {
 }
 
 // write: 32 bytes
-static void sha256(const ubyte* buf, uint size, ubyte* hash_write) {
+inline void sha256(const ubyte* buf, uint size, ubyte* hash_write) {
     mbedtls_md_context_t ctx;
     mbedtls_md_init(&ctx);
     mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
@@ -41,7 +41,7 @@ static void sha256(const ubyte* buf, uint size, ubyte* hash_write) {
 }
 
 // write: 20 bytes
-static void sha1(const ubyte* buf, uint size, ubyte* hash_write) {
+inline void sha1(const ubyte* buf, uint size, ubyte* hash_write) {
     mbedtls_md_context_t ctx;
     mbedtls_md_init(&ctx);
     mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA1), 0);
@@ -52,7 +52,7 @@ static void sha1(const ubyte* buf, uint size, ubyte* hash_write) {
 }
 
 // write: 16 bytes
-static void md5(const ubyte* buf, uint size, ubyte* hash_write) {
+inline void md5(const ubyte* buf, uint size, ubyte* hash_write) {
     mbedtls_md_context_t ctx;
     mbedtls_md_init(&ctx);
     mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_MD5), 0);
@@ -62,10 +62,11 @@ static void md5(const ubyte* buf, uint size, ubyte* hash_write) {
     mbedtls_md_free(&ctx);
 }
 
-static ubyte aes_cache[17000];
+static ubyte aes_cache[17000]; // todo remov dis (and other similar global variables here)
+                               //  because only used for benchmarking purposes (dynamically allocate while benchmarking?)
 
 // write: 16 bytes
-static void aes_hash(const ubyte* buf, uint size, ubyte* hash_write, ubyte key[16]) {
+inline void aes_hash(const ubyte* buf, uint size, ubyte* hash_write, ubyte key[16]) {
     mbedtls_cipher_context_t cipher_ctx;
     mbedtls_cipher_init(&cipher_ctx);
     const mbedtls_cipher_info_t* cipher_info = mbedtls_cipher_info_from_type(MBEDTLS_CIPHER_AES_128_CBC);
@@ -95,7 +96,7 @@ static uint chacha20_init_vector[16]; // this must be filled with non-random sta
 // also a nice thing will be to zero-out the stack memory before exiting this function, but not required in this environment
 
 // write: 64 bytes
-static void chacha20_hash_manual(const ubyte* buf, uint size, ubyte* hash_write) {
+inline void chacha20_hash_manual(const ubyte* buf, uint size, ubyte* hash_write) {
     uint prev_block[16];
     uint* chacha_block = (uint*) hash_write;
     const uint block_size = sizeof(prev_block);
@@ -125,7 +126,7 @@ static void chacha20_hash_manual(const ubyte* buf, uint size, ubyte* hash_write)
 }
 
 // write: 16 bytes
-static void chacha20_hash_sodium(const ubyte* buf, uint size, ubyte* hash_write, ubyte key[32]) {
+inline void chacha20_hash_sodium(const ubyte* buf, uint size, ubyte* hash_write, ubyte key[32]) {
     ubyte nonce[8];
     crypto_stream_chacha20_xor(aes_cache, buf, size, nonce, key);
 
@@ -134,7 +135,7 @@ static void chacha20_hash_sodium(const ubyte* buf, uint size, ubyte* hash_write,
 
 typedef mbedtls_md_context_t sha256_handle;
 
-static inline sha256_handle create_sha256() {
+inline sha256_handle create_sha256() {
     mbedtls_md_context_t ctx;
     mbedtls_md_init(&ctx);
     mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_MD5), 0);
@@ -142,16 +143,16 @@ static inline sha256_handle create_sha256() {
     return ctx;
 }
 
-static inline void update_sha256(mbedtls_md_context_t* ctx, const void* buf, uint size) {
+inline void update_sha256(mbedtls_md_context_t* ctx, const void* buf, uint size) {
     mbedtls_md_update(ctx, (const ubyte*) buf, size);
 }
 
-static inline void finish_sha256(mbedtls_md_context_t* ctx, void* hash_write) {
+inline void finish_sha256(mbedtls_md_context_t* ctx, void* hash_write) {
     mbedtls_md_finish(ctx, (ubyte*) hash_write);
     mbedtls_md_free(ctx);
 }
 
-static void optimized_md5(const ubyte* buf, uint size, ubyte* hash_write) {
+inline void optimized_md5(const ubyte* buf, uint size, ubyte* hash_write) {
     // setup
     const mbedtls_md_info_t* settings = mbedtls_md_info_from_type(MBEDTLS_MD_MD5);
     void* ctx = settings->ctx_alloc_func();
@@ -174,7 +175,7 @@ typedef struct mbedtls_md5_context
 
 static mbedtls_md5_context static_md5_context;
 
-static void optimized2_md5(const ubyte* buf, uint size, ubyte* hash_write) {
+inline void optimized2_md5(const ubyte* buf, uint size, ubyte* hash_write) {
     // setup
     const mbedtls_md_info_t* settings = mbedtls_md_info_from_type(MBEDTLS_MD_MD5);
     /// alloc ctx
@@ -209,7 +210,7 @@ static mbedtls_sha256_context static_sha256_context;
 
 void esp_sha_unlock_engine(esp_sha_type sha_type);
 
-static void optimized_sha256(const ubyte* buf, uint size, ubyte* hash_write) {
+inline void optimized_sha256(const ubyte* buf, uint size, ubyte* hash_write) {
     // setup
     const mbedtls_md_info_t* settings = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
     /// alloc ctx
@@ -230,19 +231,19 @@ static void optimized_sha256(const ubyte* buf, uint size, ubyte* hash_write) {
     //settings->ctx_free_func(ctx);
 }
 
-static void sudium_sha256(const ubyte* buf, uint size, ubyte* hash_write) {
+inline void sudium_sha256(const ubyte* buf, uint size, ubyte* hash_write) {
     crypto_hash_sha256_state state;
     crypto_hash_sha256_init(&state);
     crypto_hash_sha256_update(&state, buf, size);
     crypto_hash_sha256_final(&state, hash_write);
 }
 
-static void sudium_md5(const ubyte* buf, uint size, ubyte* hash_write) {
+inline void sudium_md5(const ubyte* buf, uint size, ubyte* hash_write) {
     //crypto_generichash_state state;
     //crypto_generichash_init(&state, )
 }
 
-static inline void fill_random(void* buf, uint size) {
+inline void fill_random(void* buf, uint size) {
     esp_fill_random(buf, size);
     return;
     for (uint i = 0; i < size / 4; ++i)

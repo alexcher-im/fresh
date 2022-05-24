@@ -2,6 +2,7 @@
 
 #include <unordered_map>
 #include "mesh_protocol.h"
+#include "fresh_config.h"
 
 
 enum class PeerSecureSessionEstablishmentStage
@@ -41,7 +42,9 @@ struct PeerSecureSessionEstablishmentInfo
     PeerInterfaceInfoSecure session_info;
     PeerSecureSessionEstablishmentStage stage = PeerSecureSessionEstablishmentStage::UNKNOWN;
 
-    static const u64 SESSION_MAX_LIVE_TIME = 2000000;  // todo make use of this value
+    inline bool is_expired(u64 time) {
+        return time_start + MAX_SECURE_EST_SESSION_LIVE_TIME < time;
+    }
 };
 
 
@@ -68,6 +71,8 @@ public:
     virtual void unregister_far_addr(MeshProto::far_addr_t far_addr) = 0;
 
     virtual MeshPhyAddrPtr get_phy_addr(MeshProto::far_addr_t far_addr) = 0;
+
+    virtual void check_caches() = 0;
 };
 
 
@@ -116,5 +121,18 @@ public:
     MeshPhyAddrPtr get_phy_addr(MeshProto::far_addr_t far_addr) override {
         auto iter = far_to_phy_map.find(far_addr);
         return iter == far_to_phy_map.end() ? nullptr : (MeshPhyAddrPtr) &iter->second;
+    }
+
+    void check_caches() override {
+        auto time  = esp_timer_get_time();
+
+        for (auto it = est_sessions.begin(); it != est_sessions.end();) {
+            auto& [phy_addr, est_session] = *it;
+
+            if (est_session.is_expired(time))
+                it = est_sessions.erase(it);
+            else
+                ++it;
+        }
     }
 };

@@ -88,8 +88,8 @@ static void compete_data_stream(MeshController& controller, ubyte* data, uint si
     compl_info->size = size;
     compl_info->src_addr = src_addr;
     compl_info->dst_addr = dst_addr;
-    xTaskCreatePinnedToCore(task_handle_packet, "handle mesh packet", MeshController::HANDLE_PACKET_TASK_STACK_SIZE,
-                            compl_info, MeshController::HANDLE_PACKET_TASK_PRIORITY, nullptr, MeshController::HANDLE_PACKET_TASK_AFFINITY);
+    xTaskCreatePinnedToCore(task_handle_packet, HANDLE_DATA_PACKET_NAME, HANDLE_PACKET_TASK_STACK_SIZE,
+                            compl_info, HANDLE_PACKET_TASK_PRIORITY, nullptr, HANDLE_PACKET_TASK_AFFINITY);
 }
 
 static bool check_stream_completeness(MeshController& controller, const DataStreamIdentity& identity,
@@ -405,7 +405,7 @@ MeshController::MeshController(const char* netname, far_addr_t self_addr_) : sel
 
     memset(pre_shared_key, 0, sizeof(pre_shared_key));
 
-    xTaskCreatePinnedToCore(task_check_packets, "mesh check packets", CHECK_PACKETS_TASK_STACK_SIZE, this,
+    xTaskCreatePinnedToCore(task_check_packets, CHECK_PACKETS_TASK_NAME, CHECK_PACKETS_TASK_STACK_SIZE, this,
                             CHECK_PACKETS_TASK_PRIORITY, &check_packets_task_handle, CHECK_PACKETS_TASK_AFFINITY);
 }
 
@@ -593,6 +593,7 @@ void IRAM_ATTR MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_a
     while (true) {
         for (auto& interface : self->interfaces) {
             interface.interface->check_packets();
+            interface.sessions->check_caches();
         }
         self->check_data_streams();
         self->router.check_packet_cache();
@@ -652,22 +653,9 @@ void MeshController::check_data_streams() {
 
 extern "C" void start_mesh() {
     auto wifi_interface = new WifiEspNowMeshInterface();
-    auto controller = new MeshController("alexcher&ameharu", wifi_interface->derive_far_addr_uint32());
+    auto controller = new MeshController("dev net", wifi_interface->derive_far_addr_uint32());
     controller->set_psk_password("dev network");
     controller->user_stream_handler = handle_packet;
-    //controller->user_stream_handler = [](MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
-    //    printf("Hello packet!");
-    //};
-
-    //controller->user_stream_handler = [controller](MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
-    //    printf("Hello packet!");
-//
-    //    // sending response. builders are used to send large amount of data using many small chunks
-    //    const char response_data[] = "hello!";
-    //    MeshStreamBuilder builder(*controller, src_addr, sizeof(response_data));
-    //    builder.write(response_data, sizeof(response_data));
-    //};
-
     controller->add_interface(wifi_interface);
 
     printf("mesh started; sizeof(MeshController)=%d\n", (int) sizeof(MeshController));
@@ -695,7 +683,7 @@ extern "C" void start_mesh() {
     }
 
     if (esp_random() % 3 == 0) {
-        printf("will send a 70-byte data packet!\n");
+        printf("will send a 70-byte data garbage!\n");
         vTaskDelay(5000 / portTICK_PERIOD_MS);
         printf("sending a data packet\n");
         fflush(stdout);
@@ -718,16 +706,6 @@ extern "C" void start_mesh() {
 
 
 
-template <typename T, typename = typename std::enable_if<std::is_arithmetic<T>::value, T>::type>
-inline T kek(T value) {
-    return value + value;
-}
-
-template <typename T>
-int kek(T& value) {
-    printf("called kek with wrong args\n");
-    return 0;
-};
 
 
 
@@ -762,8 +740,6 @@ void Router::send_packet(MeshPacket* packet, uint size) {
     // routing table lookup
     auto route_iter = routes.find(dst_addr);
     if (route_iter == routes.end()) {
-        printf("no route; discovering\n");
-        fflush(stdout);
         // save the packet
         auto saved_packet = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD);
         memcpy(saved_packet, packet, size);
@@ -778,8 +754,6 @@ void Router::send_packet(MeshPacket* packet, uint size) {
         return;
     }
     if (route_iter->second.state == RouteState::INSPECTING) {
-        printf("inspecting route; saving\n");
-        fflush(stdout);
         // save the packet
         auto saved_packet = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD);
         memcpy(saved_packet, packet, size);
@@ -805,7 +779,7 @@ void Router::send_packet(MeshPacket* packet, uint size) {
 void Router::discover_route(far_addr_t dst) {
     auto far_ping = (MeshPacket*) malloc(MESH_CALC_SIZE(far_ping) + MESH_SECURE_PACKET_OVERHEAD);
     far_ping->type = MeshPacketType::FAR_PING;
-    far_ping->ttl = MeshController::DEFAULT_TTL;
+    far_ping->ttl = CONTROLLER_DEFAULT_PACKET_TTL;
     far_ping->far_ping.routers_passed = 0;
     far_ping->far_ping.router_num_with_min_mtu = 0;
     memcpy(&far_ping->src_addr, &controller.self_addr, sizeof(far_addr_t));
@@ -835,8 +809,8 @@ void Router::discover_route(far_addr_t dst) {
     free(far_ping);
 }
 
-decltype(Router::packet_cache.tx_cache)::iterator Router::check_packet_cache(
-        decltype(packet_cache.tx_cache)::iterator cache_iter, far_addr_t dst) {
+auto Router::check_packet_cache(decltype(packet_cache.tx_cache)::iterator cache_iter, far_addr_t dst)
+        -> decltype(packet_cache.tx_cache)::iterator {
     auto start_entry = &cache_iter->second;
     auto entry = start_entry;
 
@@ -957,9 +931,8 @@ void Router::check_packet_cache() {
 
             // retransmitting if broadcast
             if (identity.dst_addr == BROADCAST_FAR_ADDR && res) {
-                for (auto [peer_addr, peer_info] : peers)
-                    write_data_stream_bytes(identity.dst_addr, part->offset, part->data, part->size, true,
-                                            identity.stream_id, 0, part->broadcast_ttl, identity.src_addr);
+                write_data_stream_bytes(identity.dst_addr, part->offset, part->data, part->size, true,
+                                        identity.stream_id, 0, part->broadcast_ttl, identity.src_addr);
             }
 
             free(part->data);
@@ -1070,10 +1043,6 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
     auto phy_addr = interface_descr.sessions->get_phy_addr(gateway);
     auto mtu = interface_descr.mtu;
 
-    // todo fix this check (it can be moved inside the lower if)
-    //if (size < mtu && !force_send)
-    //    return 0;
-
     // todo this ought to be allocated from pool allocator
     // for far/optimized/broadcast
     MeshPacketType first_packet_type;
@@ -1084,39 +1053,33 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
     // for far/optimized/broadcasts
     if (dst == gateway) {
         // can use optimized far
-        packet = (MeshPacket*) malloc(
-                std::min((size_t) mtu, size +
+        auto packet_overhead_size =
                 std::max(offsetof(MeshPacket, opt_data.part_8.payload),
                          (offset == 0 ? offsetof(MeshPacket, opt_data.first.payload) : 0)) +
-                (interface_descr.is_secured ? MESH_SECURE_PACKET_OVERHEAD : 0)));
+                (interface_descr.is_secured ? MESH_SECURE_PACKET_OVERHEAD : 0);
+
+        // not a full packet
+        if (packet_overhead_size + size < mtu && !force_send)
+            return 0;
+
+        packet = (MeshPacket*) malloc(std::min((size_t) mtu, size + packet_overhead_size));
 
         first_packet_type = MeshPacketType::FAR_OPTIMIZED_DATA_FIRST;
         part_packet_type = MeshPacketType::FAR_OPTIMIZED_DATA_PART;
         data_ptr = &packet->opt_data;
     }
-    //else if (dst == BROADCAST_FAR_ADDR) {
-    //    // maybe broadcast far?
-    //    packet = (MeshPacket*) malloc(
-    //            std::min((size_t) mtu, size +
-    //            std::max(offsetof(MeshPacket, far_data.part_8.payload),
-    //                     (offset == 0 ? offsetof(MeshPacket, far_data.first.payload) : 0)) +
-    //            (interface_descr.is_secured ? MESH_SECURE_PACKET_OVERHEAD : 0)));
-    //
-    //    first_packet_type = MeshPacketType::FAR_DATA_FIRST;
-    //    part_packet_type = MeshPacketType::FAR_DATA_PART;
-    //    data_ptr = &packet->far_data;
-    //
-    //    memcpy(&packet->src_addr, &broadcast_src_addr, sizeof(far_addr_t));
-    //    memcpy(&packet->dst_addr, &dst, sizeof(far_addr_t));
-    //    packet->ttl = broadcast_ttl;
-    //}
     else {
         // common far otherwise
-        packet = (MeshPacket*) malloc(
-                std::min((size_t) mtu, size +
+        auto packet_overhead_size =
                 std::max(offsetof(MeshPacket, far_data.part_8.payload),
                          (offset == 0 ? offsetof(MeshPacket, far_data.first.payload) : 0)) +
-                (interface_descr.is_secured ? MESH_SECURE_PACKET_OVERHEAD : 0)));
+                (interface_descr.is_secured ? MESH_SECURE_PACKET_OVERHEAD : 0);
+
+        // not a full packet
+        if (packet_overhead_size + size < mtu && !force_send)
+            return 0;
+
+        packet = (MeshPacket*) malloc(std::min((size_t) mtu, size + packet_overhead_size));
 
         first_packet_type = MeshPacketType::FAR_DATA_FIRST;
         part_packet_type = MeshPacketType::FAR_DATA_PART;
@@ -1206,10 +1169,10 @@ bool NsMeshController::DataStream::remake_parts(ushort start, ushort end) {
     bool begin_found = false, end_found = false;
     ushort new_segment[2]{start, end}; // new segment boundaries. may extend if merged with existing segments
 
-    ushort new_collection[RECV_PAIR_CNT + 1][2];
+    ushort new_collection[DATA_STREAM_RECV_PAIR_CNT + 1][2];
     uint new_collection_fill_level = 0;
 
-    for (int i = 0; i < RECV_PAIR_CNT; ++i) {
+    for (int i = 0; i < DATA_STREAM_RECV_PAIR_CNT; ++i) {
         if (recv_parts[i][0] == recv_parts[i][1])
             break;
 
@@ -1242,7 +1205,7 @@ bool NsMeshController::DataStream::remake_parts(ushort start, ushort end) {
         memcpy(new_collection[new_collection_fill_level++], new_segment, sizeof(new_segment));
 
     // requires storing more segments than possible. error.
-    if (new_collection_fill_level > RECV_PAIR_CNT) {
+    if (new_collection_fill_level > DATA_STREAM_RECV_PAIR_CNT) {
         return false;
     }
 
