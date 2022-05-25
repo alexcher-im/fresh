@@ -100,13 +100,14 @@ static bool check_stream_completeness(MeshController& controller, const DataStre
     compete_data_stream(controller, stream.stream_data, stream.stream_size, identity.src_addr, identity.dst_addr);
     stream.stream_data = nullptr;
 
-    // broadcasts are never deleted immediately. at this point, .is_completed() will always return false and stream will only expire
+    // broadcasts are never deleted immediately. at this point, .is_completed() will return if stream handler
+    // should be called, but stream itself will only expire (deleted in Router::check_packet_cache())
     if (identity.dst_addr != BROADCAST_FAR_ADDR)
         controller.data_streams.erase(identity);
     return true;
 }
 
-// todo add controller.route.routes() (router.add_route()) for new peers
+// todo add controller.router.routes() (router.add_route()) for new peers
 static inline void handle_near_secure(MeshController& controller, uint interface_id, MeshPhyAddrPtr phy_addr,
                                       MeshPacket* packet, uint size) {
     auto& interface_descr = controller.interfaces[interface_id];
@@ -305,7 +306,7 @@ static inline void handle_near_insecure(MeshController& controller, uint interfa
 }
 
 static inline void add_rx_data_packet_to_cache(MeshController& controller, DataStreamIdentity identity,
-                                               uint offset, ubyte* data, uint size, ubyte broadcast_ttl=0) {
+                                               uint offset, ubyte* data, uint size, ubyte broadcast_ttl = 0) {
     auto& cached_stream = controller.router.packet_cache.rx_stream_cache[identity];
     auto& entry = cached_stream.part;
     cached_stream.last_modif_timestamp = esp_timer_get_time();
@@ -327,12 +328,21 @@ static inline bool handle_data_first_packet(MeshController& controller, PacketFa
     decltype(packet->stream_size) stream_size;
     memcpy(&stream_size, &packet->stream_size, sizeof(stream_size));
 
+    // retransmit packet if it is not for us
+    if (dst != controller.self_addr && dst != BROADCAST_FAR_ADDR) {
+        controller.router.write_data_stream_bytes(dst, 0, packet->payload,
+                                                  payload_size, true, packet->stream_id, stream_size, 0, src);
+        return false;
+    }
+
+    // fast path: do not create stream if it will be single-packet
     if (payload_size >= stream_size && dst != BROADCAST_FAR_ADDR) {
         auto stream_content = (ubyte*) malloc(stream_size);
         memcpy(stream_content, packet->payload, stream_size);
         compete_data_stream(controller, stream_content, stream_size, src, dst);
         return true;
     }
+    // create stream and add packet to it
     else {
         DataStreamIdentity identity;
         identity.src_addr = src;
@@ -356,6 +366,14 @@ static inline bool handle_data_part_packet(MeshController& controller, PacketFar
     ushort offset;
     memcpy(&offset, &packet->offset, sizeof(ushort));
 
+    // retransmit packet if it is not for us
+    if (dst != controller.self_addr && dst != BROADCAST_FAR_ADDR) {
+        controller.router.write_data_stream_bytes(dst, offset, packet->payload,
+                                                  payload_size, true, packet->stream_id, 0, 0, src);
+        return false;
+    }
+
+    // find existing stream to add packet to, or cache the packet until it expires or stream appears
     auto stream_iter = controller.data_streams.find(identity);
     if (stream_iter == controller.data_streams.end()) {
         add_rx_data_packet_to_cache(controller, identity, offset, packet->payload, payload_size);
@@ -363,6 +381,7 @@ static inline bool handle_data_part_packet(MeshController& controller, PacketFar
     }
     auto& stream = stream_iter->second;
 
+    // add data and check if stream can be finished
     auto result = stream.add_data(offset, packet->payload, payload_size);
     if (result)
         stream.last_modif_timestamp = esp_timer_get_time();
@@ -421,7 +440,9 @@ void IRAM_ATTR MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_a
 
     far_addr_t tx_addr;
     PeerSessionInfo* session;
+    uint allocated_packet_size = size;
 
+    // gathering secure/insecure session info and checking packet signature
     if (interface_descr.is_secured) {
         if (packet->type >= MeshPacketType::FIRST_NEAR_PACKET_NUM) {
             handle_near_secure(*this, interface_id, phy_addr, packet, size);
@@ -542,12 +563,15 @@ void IRAM_ATTR MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_a
         return;
     }
 
-    // retransmitting packet
+    // retransmitting packet (some required-to-retransmit packets go further and will be retransmitted
+    // inside it's handlers (handle_data_first_packet(), handle_data_part_packet())
     if (dst != self_addr && dst != BROADCAST_FAR_ADDR) {
         if (!--packet->ttl)
             return;
-        // fixme may get out of bounds if packet got from insecure interface
-        router.send_packet(packet, size);
+
+        // retransmit if packet fits the peers MTU (any non-data packet do)
+        if (router.send_packet(packet, size, allocated_packet_size))
+            return;
     }
 
     if (packet->type == MeshPacketType::FAR_PING_RESPONSE) {
@@ -694,7 +718,8 @@ extern "C" void start_mesh() {
         for (auto& [far, peer] : controller->router.peers)
             packet->dst_addr = far;
         packet->far_data.first.stream_size = 70;
-        controller->router.send_packet(packet, MESH_CALC_SIZE(far_data) + 70);
+        controller->router.send_packet(packet, MESH_CALC_SIZE(far_data) + 70,
+                                       MESH_CALC_SIZE(far_data) + MESH_SECURE_PACKET_OVERHEAD + 70);
         free(packet);
     }
 
@@ -731,7 +756,7 @@ void Router::add_route(far_addr_t dst, far_addr_t gateway, ubyte distance) {
     // todo implement adding route
 }
 
-void Router::send_packet(MeshPacket* packet, uint size) {
+bool Router::send_packet(MeshPacket* packet, uint size, uint available_size) {
     // there are no broadcast packets, except for data packets, that are sent by another function
 
     far_addr_t dst_addr;
@@ -739,6 +764,7 @@ void Router::send_packet(MeshPacket* packet, uint size) {
 
     // routing table lookup
     auto route_iter = routes.find(dst_addr);
+    // no route: save packet and discover the route
     if (route_iter == routes.end()) {
         // save the packet
         auto saved_packet = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD);
@@ -751,29 +777,57 @@ void Router::send_packet(MeshPacket* packet, uint size) {
         route.time_started = esp_timer_get_time();
 
         discover_route(dst_addr);
-        return;
+        return true;
     }
+    // route is being inspected: save the packet
     if (route_iter->second.state == RouteState::INSPECTING) {
         // save the packet
         auto saved_packet = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD);
         memcpy(saved_packet, packet, size);
         packet_cache.add_tx_packet(dst_addr, {saved_packet, size});
-        return;
+        return true;
     }
 
+    // routing table lookup
     auto gateway_far_addr = route_iter->second.routes[0].gateway_addr;
     packet->ttl = route_iter->second.routes[0].distance + 1;
 
     // peer table lookup
     auto interface = peers[gateway_far_addr].interface;
     auto interface_descr = controller.interfaces[interface->id];
+
+    // packet size exceeds the interface MTU
+    if (size + (interface_descr.is_secured * MESH_SECURE_PACKET_OVERHEAD) > interface_descr.mtu) {
+        return false;
+    }
+
     auto phy_addr = interface_descr.sessions->get_phy_addr(gateway_far_addr);
-    auto session = interface_descr.sessions->get_or_none_session(phy_addr);
-    if (interface_descr.is_secured)
+
+    bool needs_free = false;
+    if (interface_descr.is_secured) {
+        // if no space for security payload
+        if (available_size - size < MESH_SECURE_PACKET_OVERHEAD) {
+            auto new_packet = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD); // todo should use manual fast allocator
+            memcpy(new_packet, packet, size);
+            packet = new_packet;
+            needs_free = true;
+        }
+
+        // generate signature
+        auto session = interface_descr.sessions->get_or_none_session(phy_addr);
         generate_packet_signature(&controller, session, packet, size);
 
-    interface->send_packet(phy_addr, packet, size + MESH_SECURE_PACKET_OVERHEAD);
-    return;
+        size += MESH_SECURE_PACKET_OVERHEAD;
+    }
+
+    // send
+    interface->send_packet(phy_addr, packet, size);
+
+    // free auxiliary memory if allocated
+    if (needs_free)
+        free(packet);
+
+    return true;
 }
 
 void Router::discover_route(far_addr_t dst) {
@@ -819,7 +873,7 @@ auto Router::check_packet_cache(decltype(packet_cache.tx_cache)::iterator cache_
     if (route.state == RouteState::ESTABLISHED) {
         while (entry) {
             if (entry->type == CachedTxDataInfo::CachedDataType::STANDALONE_PACKET) {
-                send_packet(entry->standalone.data, entry->standalone.size);
+                send_packet(entry->standalone.data, entry->standalone.size, entry->standalone.size + MESH_SECURE_PACKET_OVERHEAD);
                 free(entry->standalone.data);
             }
 

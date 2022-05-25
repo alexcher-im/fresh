@@ -8,10 +8,10 @@ Currently, in a very raw state, barely supports:
 * Route discovery
 * Stream fragmentation/defragmentation
 * Packet retransmission
+* Multi-MTU support (reshaping streams to lower-mtu interfaces, but not in reverse)
 
 Needs to be done:
 * Insecure interface support
-* Multi-MTU support
 * Combination of both secure and insecure interfaces on the same device
 * Removing devices and fixing routes
 * Encryption (only authentication is implemented now)

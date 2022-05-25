@@ -175,7 +175,9 @@ namespace NsMeshController
         auto check_packet_cache(decltype(packet_cache.tx_cache)::iterator cache_iter, MeshProto::far_addr_t dst)
                 -> decltype(packet_cache.tx_cache)::iterator;
 
-        void send_packet(MeshProto::MeshPacket* packet, uint size);
+        // available_size must always be >= size, UB instead
+        // returns true if packet sent or cached successfully, false if it's size exceeds peers MTU
+        bool send_packet(MeshProto::MeshPacket* packet, uint size, uint available_size);
 
         void discover_route(MeshProto::far_addr_t dst);
 
