@@ -3,13 +3,10 @@
 #include <list>
 #include <vector>
 #include "types.h"
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#include <bitset>
 #include <functional>
 #include "mesh_protocol.h"
 #include "mesh_base_interface.h"
-#include "utils.h"
+#include "platform/api.h"
 
 
 namespace NsMeshController
@@ -237,7 +234,7 @@ public:
     std::vector<NsMeshController::InterfaceInternalParams> interfaces;
     NsMeshController::Router router{*this};
     MeshProto::far_addr_t self_addr;
-    xTaskHandle check_packets_task_handle;
+    Os::TaskHandle check_packets_task_handle;
     std::unordered_map<NsMeshController::DataStreamIdentity, NsMeshController::DataStream> data_streams; // this should be in Router
 
     std::function<void(MeshProto::far_addr_t, const ubyte*, ushort)> user_stream_handler = default_stream_handler;

@@ -2,8 +2,9 @@
 
 #include "types.h"
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
+// affinity for tasks meaning use all cores
+const u64 NO_AFFINITY = -1;
+
 
 // interface secure session establishment state
 const u64 MAX_SECURE_EST_SESSION_LIVE_TIME = 4'000'000; // in microseconds
@@ -12,13 +13,13 @@ const u64 MAX_SECURE_EST_SESSION_LIVE_TIME = 4'000'000; // in microseconds
 const auto CHECK_PACKETS_TASK_NAME = "mesh check packets";
 const int CHECK_PACKETS_TASK_STACK_SIZE = 4096;
 const int CHECK_PACKETS_TASK_PRIORITY = -7;
-const int CHECK_PACKETS_TASK_AFFINITY = tskNO_AFFINITY;
+const u64 CHECK_PACKETS_TASK_AFFINITY = NO_AFFINITY;
 
 // TASK: handle data packets
 const auto HANDLE_DATA_PACKET_NAME = "handle mesh packet";
 const int HANDLE_PACKET_TASK_STACK_SIZE = 8192;
 const int HANDLE_PACKET_TASK_PRIORITY = -9;
-const int HANDLE_PACKET_TASK_AFFINITY = tskNO_AFFINITY;
+const u64 HANDLE_PACKET_TASK_AFFINITY = NO_AFFINITY;
 
 // controller
 const int CONTROLLER_DEFAULT_PACKET_TTL = 5;
