@@ -60,11 +60,11 @@ public:
 
     virtual void remove_session(MeshPhyAddrPtr phy_addr) = 0;
 
-    virtual PeerSecureSessionEstablishmentInfo* get_or_create_est_session(MeshPhyAddrPtr phy_addr) = 0;
+    virtual PeerSecureSessionEstablishmentInfo* get_or_create_est_session(MeshPhyAddrPtr phy_addr) { return nullptr; }
 
-    virtual PeerSecureSessionEstablishmentInfo* get_or_none_est_session(MeshPhyAddrPtr phy_addr) = 0;
+    virtual PeerSecureSessionEstablishmentInfo* get_or_none_est_session(MeshPhyAddrPtr phy_addr) { return nullptr; }
 
-    virtual void remove_est_session(MeshPhyAddrPtr phy_addr) = 0;
+    virtual void remove_est_session(MeshPhyAddrPtr phy_addr) {}
 
     virtual void register_far_addr(MeshProto::far_addr_t far_addr, MeshPhyAddrPtr phy_addr) = 0;
 
@@ -72,7 +72,7 @@ public:
 
     virtual MeshPhyAddrPtr get_phy_addr(MeshProto::far_addr_t far_addr) = 0;
 
-    virtual void check_caches() = 0;
+    virtual void check_caches(u64 time) {}
 };
 
 
@@ -123,9 +123,7 @@ public:
         return iter == far_to_phy_map.end() ? nullptr : (MeshPhyAddrPtr) &iter->second;
     }
 
-    void check_caches() override {
-        auto time  = esp_timer_get_time();
-
+    void check_caches(u64 time) override {
         for (auto it = est_sessions.begin(); it != est_sessions.end();) {
             auto& [phy_addr, est_session] = *it;
 
@@ -134,5 +132,39 @@ public:
             else
                 ++it;
         }
+    }
+};
+
+template <typename TPhyAddr>
+class SimpleInsecureMeshInterfaceSessionManager : public MeshInterfaceSessionManager
+{
+public:
+    std::unordered_map<TPhyAddr, PeerSessionInfo> sessions;
+    std::unordered_map<MeshProto::far_addr_t, TPhyAddr> far_to_phy_map;
+
+    PeerSessionInfo* get_or_create_session(MeshPhyAddrPtr phy_addr) override {
+        return &sessions[*(TPhyAddr*)phy_addr];
+    }
+
+    PeerSessionInfo* get_or_none_session(MeshPhyAddrPtr phy_addr) override {
+        auto iter = sessions.find(*(TPhyAddr*)phy_addr);
+        return iter == sessions.end() ? nullptr : &iter->second;
+    };
+
+    void remove_session(MeshPhyAddrPtr phy_addr) override {
+        sessions.erase(*(TPhyAddr*)phy_addr);
+    }
+
+    void register_far_addr(MeshProto::far_addr_t far_addr, MeshPhyAddrPtr phy_addr) override {
+        far_to_phy_map[far_addr] = *(TPhyAddr*)phy_addr;
+    }
+
+    void unregister_far_addr(MeshProto::far_addr_t far_addr) override {
+        far_to_phy_map.erase(far_addr);
+    }
+
+    MeshPhyAddrPtr get_phy_addr(MeshProto::far_addr_t far_addr) override {
+        auto iter = far_to_phy_map.find(far_addr);
+        return iter == far_to_phy_map.end() ? nullptr : (MeshPhyAddrPtr) &iter->second;
     }
 };

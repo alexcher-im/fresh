@@ -1,6 +1,5 @@
 #include "mesh_controller.h"
-#include "hashes.h"
-#include "interfaces/wifi_esp_now_interface.h"
+//#include "interfaces/wifi_esp_now_interface.h"
 #include "mesh_stream_builder.h"
 #include <new>
 
@@ -23,7 +22,7 @@ struct MessageHashConcatParams
 static bool generate_packet_signature(const MeshController* controller, const PeerSessionInfo* session,
                                       MeshPacket* packet, uint size) {
     auto sign = (MessageSign*) ((ubyte*) packet + size);
-    auto timestamp = esp_timer_get_time();
+    auto timestamp = Os::get_microseconds();
 
     MessageHashConcatParams hash_concat_params;
     hash_concat_params.packet_size = size;
@@ -32,10 +31,10 @@ static bool generate_packet_signature(const MeshController* controller, const Pe
     memcpy(&hash_concat_params.session_key, &session->secure.session_key, sizeof(session_key_t));
 
     ubyte correct_signature[32];
-    auto hash_ctx = create_sha256();
-    update_sha256(&hash_ctx, packet, size);
-    update_sha256(&hash_ctx, &hash_concat_params, sizeof(MessageHashConcatParams));
-    finish_sha256(&hash_ctx, correct_signature);
+    auto hash_ctx = Os::create_sha256();
+    Os::update_sha256(&hash_ctx, packet, size);
+    Os::update_sha256(&hash_ctx, &hash_concat_params, sizeof(MessageHashConcatParams));
+    Os::finish_sha256(&hash_ctx, correct_signature);
 
     if constexpr (sizeof(hashdigest_t) > sizeof(correct_signature))
         memset((ubyte*) &sign->hash + sizeof(correct_signature), 0, sizeof(correct_signature) - sizeof(hashdigest_t));
@@ -67,7 +66,7 @@ static void task_handle_packet(void* userdata) {
     info->controller->user_stream_handler(info->src_addr, info->data, info->size);
     free(info->data);
     free(info);
-    vTaskDelete(nullptr);
+    Os::end_self_task();
 }
 
 
@@ -88,8 +87,8 @@ static void compete_data_stream(MeshController& controller, ubyte* data, uint si
     compl_info->size = size;
     compl_info->src_addr = src_addr;
     compl_info->dst_addr = dst_addr;
-    xTaskCreatePinnedToCore(task_handle_packet, HANDLE_DATA_PACKET_NAME, HANDLE_PACKET_TASK_STACK_SIZE,
-                            compl_info, HANDLE_PACKET_TASK_PRIORITY, nullptr, HANDLE_PACKET_TASK_AFFINITY);
+    Os::create_task(task_handle_packet, HANDLE_DATA_PACKET_NAME, HANDLE_PACKET_TASK_STACK_SIZE,
+                    compl_info, HANDLE_PACKET_TASK_PRIORITY, nullptr, HANDLE_PACKET_TASK_AFFINITY);
 }
 
 static bool check_stream_completeness(MeshController& controller, const DataStreamIdentity& identity,
@@ -130,8 +129,8 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         }
         // setting est session
         est_session->stage = PeerSecureSessionEstablishmentStage::WAITING_FOR_HELLO_AUTH;
-        est_session->time_start = esp_timer_get_time();
-        fill_random(&est_session->peer_nonce, sizeof(nonce_t));
+        est_session->time_start = Os::get_microseconds();
+        Os::fill_random(&est_session->peer_nonce, sizeof(nonce_t));
 
         // generating response packet
         auto packet_size = MESH_CALC_SIZE(near_hello_init);
@@ -139,7 +138,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         memcpy(&init_packet->near_hello_init.member_nonce, &est_session->peer_nonce, sizeof(nonce_t));
         interface->send_packet(phy_addr, init_packet, packet_size);
         interface->free_near_packet(init_packet);
-        printf("time after hello handler: %llu\n", esp_timer_get_time());
+        printf("time after hello handler: %llu\n", Os::get_microseconds());
     }
 
     else if (packet->type == MeshPacketType::NEAR_HELLO_INIT) {
@@ -157,14 +156,14 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         }
         // setting est session
         est_session->stage = PeerSecureSessionEstablishmentStage::WAITING_FOR_HELLO_JOINED;
-        fill_random(&est_session->session_info.session_key, sizeof(session_key_t));
+        Os::fill_random(&est_session->session_info.session_key, sizeof(session_key_t));
 
         // generating response packet
         auto packet_size = MESH_CALC_SIZE(near_hello_authorize);
         auto auth_packet = interface->alloc_near_packet(MeshPacketType::HEAR_HELLO_AUTHORIZE, packet_size);
         memcpy(&auth_packet->near_hello_authorize.session_key, &est_session->session_info.session_key, sizeof(session_key_t));
         memcpy(&auth_packet->near_hello_authorize.self_far_addr, &controller.self_addr, sizeof(far_addr_t));
-        auth_packet->near_hello_authorize.initial_timestamp = esp_timer_get_time();
+        auth_packet->near_hello_authorize.initial_timestamp = Os::get_microseconds();
 
         // generating hash (packet sign)
         ubyte hash_digest[32];
@@ -172,14 +171,14 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         ubyte hash_src[hash_src_size];
         memcpy(hash_src, auth_packet, offsetof(MeshPacket, near_hello_authorize.hash));
         memcpy(&hash_src[offsetof(MeshPacket, near_hello_authorize.hash)], &controller.pre_shared_key, sizeof(controller.pre_shared_key));
-        sha256(hash_src, hash_src_size, hash_digest);
+        Os::sha256(hash_src, hash_src_size, hash_digest);
 
         memcpy(&auth_packet->near_hello_authorize.hash, hash_digest, sizeof(hashdigest_t));
 
         // send
         interface->send_packet(phy_addr, auth_packet, packet_size);
         interface->free_near_packet(auth_packet);
-        printf("time after init handler: %llu\n", esp_timer_get_time());
+        printf("time after init handler: %llu\n", Os::get_microseconds());
     }
 
     else if (packet->type == MeshPacketType::HEAR_HELLO_AUTHORIZE) {
@@ -197,7 +196,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         ubyte hash_src[hash_src_size];
         memcpy(hash_src, packet, offsetof(MeshPacket, near_hello_authorize.hash));
         memcpy(&hash_src[offsetof(MeshPacket, near_hello_authorize.hash)], &controller.pre_shared_key, sizeof(controller.pre_shared_key));
-        sha256(hash_src, hash_src_size, hash_digest);
+        Os::sha256(hash_src, hash_src_size, hash_digest);
 
         if (memcmp(hash_digest, &packet->near_hello_authorize.hash, sizeof(hashdigest_t)))
             return;
@@ -215,7 +214,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         // generating response packet
         auto packet_size = MESH_CALC_SIZE(near_hello_joined_secure);
         auto joined_packet = interface->alloc_near_packet(MeshPacketType::NEAR_HELLO_JOINED, packet_size);
-        joined_packet->near_hello_joined_secure.initial_timestamp = esp_timer_get_time();
+        joined_packet->near_hello_joined_secure.initial_timestamp = Os::get_microseconds();
         memcpy(&joined_packet->near_hello_joined_secure.self_far_addr, &controller.self_addr, sizeof(far_addr_t));
 
         // generating hash (packet sign)
@@ -223,7 +222,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         ubyte hash_j[hash_j_size];
         memcpy(hash_j, joined_packet, offsetof(MeshPacket, near_hello_joined_secure.hash));
         memcpy(&hash_j[offsetof(MeshPacket, near_hello_joined_secure.hash)], &controller.pre_shared_key, sizeof(controller.pre_shared_key));
-        sha256(hash_j, hash_j_size, hash_digest);
+        Os::sha256(hash_j, hash_j_size, hash_digest);
 
         memcpy(&joined_packet->near_hello_joined_secure.hash, hash_digest, sizeof(hashdigest_t));
 
@@ -232,7 +231,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         interface->free_near_packet(joined_packet);
 
         interface_descr.sessions->remove_est_session(phy_addr);
-        printf("time after auth handler: %llu\n", esp_timer_get_time());
+        printf("time after auth handler: %llu\n", Os::get_microseconds());
         printf("peer session done: from auth (other addr: %d)\n", session->secure.peer_far_addr);
 
         interface_descr.sessions->register_far_addr(session->secure.peer_far_addr, phy_addr);
@@ -254,7 +253,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         ubyte hash_src[hash_j_size];
         memcpy(hash_src, packet, offsetof(MeshPacket, near_hello_joined_secure.hash));
         memcpy(&hash_src[offsetof(MeshPacket, near_hello_joined_secure.hash)], &controller.pre_shared_key, sizeof(controller.pre_shared_key));
-        sha256(hash_src, hash_j_size, hash_digest);
+        Os::sha256(hash_src, hash_j_size, hash_digest);
 
         if (memcmp(hash_digest, &packet->near_hello_joined_secure.hash, sizeof(hashdigest_t)))
             return;
@@ -270,7 +269,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         memcpy(&session->secure.session_key, &est_session->session_info.session_key, sizeof(session_key_t));
 
         interface_descr.sessions->remove_est_session(phy_addr);
-        printf("time after joined handler: %llu\n", esp_timer_get_time());
+        printf("time after joined handler: %llu\n", Os::get_microseconds());
         printf("peer session done: from joined (other addr: %d)\n", session->secure.peer_far_addr);
 
         interface_descr.sessions->register_far_addr(session->secure.peer_far_addr, phy_addr);
@@ -309,7 +308,7 @@ static inline void add_rx_data_packet_to_cache(MeshController& controller, DataS
                                                uint offset, ubyte* data, uint size, ubyte broadcast_ttl = 0) {
     auto& cached_stream = controller.router.packet_cache.rx_stream_cache[identity];
     auto& entry = cached_stream.part;
-    cached_stream.last_modif_timestamp = esp_timer_get_time();
+    cached_stream.last_modif_timestamp = Os::get_microseconds();
 
     if (entry.data) {
         auto new_entry = (CachedRxDataStreamPart*) malloc(sizeof(CachedRxDataStreamPart));
@@ -348,7 +347,7 @@ static inline bool handle_data_first_packet(MeshController& controller, PacketFa
         identity.src_addr = src;
         identity.dst_addr = dst;
         identity.stream_id = packet->stream_id;
-        auto& stream = controller.data_streams.try_emplace(identity, stream_size, esp_timer_get_time()).first->second;
+        auto& stream = controller.data_streams.try_emplace(identity, stream_size, Os::get_microseconds()).first->second;
 
         auto result = stream.add_data(0, packet->payload, payload_size);
         check_stream_completeness(controller, identity, stream);
@@ -384,7 +383,7 @@ static inline bool handle_data_part_packet(MeshController& controller, PacketFar
     // add data and check if stream can be finished
     auto result = stream.add_data(offset, packet->payload, payload_size);
     if (result)
-        stream.last_modif_timestamp = esp_timer_get_time();
+        stream.last_modif_timestamp = Os::get_microseconds();
     check_stream_completeness(controller, identity, stream);
     return result;
 }
@@ -424,11 +423,15 @@ MeshController::MeshController(const char* netname, far_addr_t self_addr_) : sel
 
     memset(pre_shared_key, 0, sizeof(pre_shared_key));
 
-    xTaskCreatePinnedToCore(task_check_packets, CHECK_PACKETS_TASK_NAME, CHECK_PACKETS_TASK_STACK_SIZE, this,
-                            CHECK_PACKETS_TASK_PRIORITY, &check_packets_task_handle, CHECK_PACKETS_TASK_AFFINITY);
+    Os::create_task(task_check_packets, CHECK_PACKETS_TASK_NAME, CHECK_PACKETS_TASK_STACK_SIZE, this,
+                    CHECK_PACKETS_TASK_PRIORITY, &check_packets_task_handle, CHECK_PACKETS_TASK_AFFINITY);
 }
 
-void IRAM_ATTR MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshPacket* packet, uint size) {
+// todo remove them when debugging done
+#define MAC2STR(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
+#define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
+
+void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshPacket* packet, uint size) {
     if (!MESH_FIELD_ACCESSIBLE(type, size))
         return;
     printf("got a packet from (" MACSTR "): type=%d, size=%d\n", MAC2STR((ubyte*) phy_addr), (int) packet->type, size);
@@ -475,10 +478,10 @@ void IRAM_ATTR MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_a
         memcpy(&hash_concat_params.session_key, &session->secure.session_key, sizeof(session_key_t));
 
         ubyte correct_signature[32];
-        auto hash_ctx = create_sha256();
-        update_sha256(&hash_ctx, packet, sign_offset);
-        update_sha256(&hash_ctx, &hash_concat_params, sizeof(MessageHashConcatParams));
-        finish_sha256(&hash_ctx, correct_signature);
+        auto hash_ctx = Os::create_sha256();
+        Os::update_sha256(&hash_ctx, packet, sign_offset);
+        Os::update_sha256(&hash_ctx, &hash_concat_params, sizeof(MessageHashConcatParams));
+        Os::finish_sha256(&hash_ctx, correct_signature);
 
         if (!!memcmp(&correct_signature, &packet_signature, std::min(sizeof(hashdigest_t), sizeof(correct_signature))))
             return;
@@ -617,11 +620,11 @@ void IRAM_ATTR MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_a
     while (true) {
         for (auto& interface : self->interfaces) {
             interface.interface->check_packets();
-            interface.sessions->check_caches();
+            interface.sessions->check_caches(Os::get_microseconds());
         }
         self->check_data_streams();
         self->router.check_packet_cache();
-        vTaskDelay(1);
+        Os::sleep_ticks(1);
     }
 }
 
@@ -648,17 +651,17 @@ void MeshController::set_psk_password(const char* password) {
     memcpy(&hash_src[strlen(password) + 1], salt, sizeof(salt) - 1);
 
     ubyte hash_digest[32];
-    sha256(hash_src, sizeof(salt) + strlen(password), hash_digest);
+    Os::sha256(hash_src, sizeof(salt) + strlen(password), hash_digest);
     memcpy(pre_shared_key, hash_digest, std::min(sizeof(pre_shared_key), sizeof(hash_digest)));
 }
 
 MeshController::~MeshController() {
     // fixme memory and cpu issues with removing currently processed task
-    vTaskDelete(check_packets_task_handle);
+    Os::end_task(check_packets_task_handle);
 }
 
 void MeshController::check_data_streams() {
-    auto time = esp_timer_get_time();
+    auto time = Os::get_microseconds();
 
     for (auto i = data_streams.begin(); i != data_streams.end();) {
         auto& identity = i->first;
@@ -675,18 +678,19 @@ void MeshController::check_data_streams() {
 }
 
 
+// todo remove this function
 extern "C" void start_mesh() {
-    auto wifi_interface = new WifiEspNowMeshInterface();
-    auto controller = new MeshController("dev net", wifi_interface->derive_far_addr_uint32());
+    //auto wifi_interface = new WifiEspNowMeshInterface();
+    auto controller = new MeshController("dev net", 666);
     controller->set_psk_password("dev network");
     controller->user_stream_handler = handle_packet;
-    controller->add_interface(wifi_interface);
+    //controller->add_interface(wifi_interface);
 
     printf("mesh started; sizeof(MeshController)=%d\n", (int) sizeof(MeshController));
 
-    if (esp_random() % 3 == 0) {
+    if (Os::random_u32() % 3 == 0) {
         printf("will send a data packet!\n");
-        vTaskDelay(5000 / portTICK_PERIOD_MS);
+        Os::sleep_milliseconds(5000);
         printf("sending a data packet\n");
         fflush(stdout);
 
@@ -706,14 +710,14 @@ extern "C" void start_mesh() {
         builder.write((ubyte*) lorem, strlen(lorem) + 1);
     }
 
-    if (esp_random() % 3 == 0) {
+    if (Os::random_u32() % 3 == 0) {
         printf("will send a 70-byte data garbage!\n");
-        vTaskDelay(5000 / portTICK_PERIOD_MS);
+        Os::sleep_milliseconds(5000);
         printf("sending a data packet\n");
         fflush(stdout);
 
         auto packet = (MeshPacket*) malloc(MESH_CALC_SIZE(far_data) + MESH_SECURE_PACKET_OVERHEAD + 70);
-        packet->type = MeshProto::MeshPacketType::FAR_DATA_FIRST;
+        packet->type = MeshPacketType::FAR_DATA_FIRST;
         packet->src_addr = controller->self_addr;
         for (auto& [far, peer] : controller->router.peers)
             packet->dst_addr = far;
@@ -724,7 +728,7 @@ extern "C" void start_mesh() {
     }
 
     for (;;)
-        vTaskDelay(-1);
+        Os::sleep_ticks(-1);
 }
 
 
@@ -774,7 +778,7 @@ bool Router::send_packet(MeshPacket* packet, uint size, uint available_size) {
         // discover the route
         auto& route = routes[dst_addr];
         route.state = RouteState::INSPECTING;
-        route.time_started = esp_timer_get_time();
+        route.time_started = Os::get_microseconds();
 
         discover_route(dst_addr);
         return true;
@@ -905,7 +909,7 @@ auto Router::check_packet_cache(decltype(packet_cache.tx_cache)::iterator cache_
     }
 
     if (route.state == RouteState::INSPECTING &&
-        esp_timer_get_time() > route.time_started + RouteInfo::ROUTE_DISCOVERY_TIMEOUT) {
+        Os::get_microseconds() > route.time_started + RouteInfo::ROUTE_DISCOVERY_TIMEOUT) {
         route.state = RouteState::INEXISTING;
     }
 
@@ -951,7 +955,7 @@ void Router::check_packet_cache() {
         i = check_packet_cache(i, i->first);
     }
 
-    auto time = esp_timer_get_time();
+    auto time = Os::get_microseconds();
 
     // rx stream cache
     for (auto i = packet_cache.rx_stream_cache.begin(); i != packet_cache.rx_stream_cache.end();) {
@@ -1033,7 +1037,7 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
     // start discovering route, save data
     if (route.state == RouteState::UNKNOWN) {
         route.state = RouteState::INSPECTING;
-        route.time_started = esp_timer_get_time();
+        route.time_started = Os::get_microseconds();
         discover_route(dst);
     }
 

@@ -8,7 +8,7 @@ Currently, in a very raw state, barely supports:
 * Route discovery
 * Stream fragmentation/defragmentation
 * Packet retransmission
-* Multi-MTU support (reshaping streams to lower-mtu interfaces, but not in reverse)
+* Multi-MTU support (reshaping transit streams to lower-mtu interfaces, but not in reverse)
 
 Needs to be done:
 * Insecure interface support
@@ -16,6 +16,7 @@ Needs to be done:
 * Removing devices and fixing routes
 * Encryption (only authentication is implemented now)
 * Proper synchronization to prevent data races
+* Cross-platform support
 
 Task tracking is done via `todo`/`fixme` comments in the code.
 
