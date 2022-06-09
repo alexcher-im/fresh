@@ -388,6 +388,7 @@ static inline bool handle_data_part_packet(MeshController& controller, PacketFar
     return result;
 }
 
+// todo rewrite this function ASAP because it's broken
 static inline void retransmit_broadcast(MeshController& controller, MeshPacket* packet, uint size, uint payload_size, uint offset, far_addr_t src_addr) {
     for (auto [peer_addr, peer] : controller.router.peers) {
         auto interface = peer.interface;
@@ -400,7 +401,7 @@ static inline void retransmit_broadcast(MeshController& controller, MeshPacket* 
             // fixme unaligned access to many parameters
             controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, offset, packet->bc_data.first.payload, payload_size, true,
                                                       packet->bc_data.first.stream_id, packet->bc_data.first.stream_size,
-                                                      src_addr, packet->ttl); // ttl already decreased
+                                                      packet->ttl, src_addr); // ttl already decreased
         }
         else {
             auto phy_addr = controller.interfaces[interface->id].sessions->get_phy_addr(peer_addr);
@@ -964,7 +965,7 @@ void Router::check_packet_cache() {
 
         DataStream* stream;
 
-        ubyte fake_stream_storage[sizeof(DataStream)]; // yes, destructor is not called
+        ubyte fake_stream_storage[sizeof(DataStream)]; // no, destructor is called later, but actually useless
 
         // looking up for stream or creating fake one if packets need to be deleted
         auto streams_iter = controller.data_streams.find(identity);
@@ -1001,7 +1002,7 @@ void Router::check_packet_cache() {
         }
 
         if (streams_iter == controller.data_streams.end()) {
-            stream->~DataStream(); // actually useless, because only does free(nullptr)
+            ((DataStream*) fake_stream_storage)->~DataStream(); // actually useless, because only does free(nullptr)
         }
         else {
             check_stream_completeness(controller, identity, *stream);
@@ -1041,7 +1042,7 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
         discover_route(dst);
     }
 
-    // save data
+    // save data to packet_cache.tx_cache (linked list of streams/standalone packets, and stream in a linked list of its parts)
     if (route.state == RouteState::INSPECTING) {
         auto saved_data = malloc(size);
         memcpy(saved_data, data, size);
@@ -1054,7 +1055,7 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
             entry = entry->next;
         }
 
-        // reached end
+        // reached end (not found existing entry)
         if (!entry) {
             entry = &first_entry;
             // if some node existed in cache, but is not suitable for us - create new node and place before the existing one
@@ -1077,7 +1078,7 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
         }
 
         // found existing stream
-        if (entry->type == CachedTxDataInfo::CachedDataType::DATA_STREAM) {
+        else {
             auto new_entry = (CachedTxDataStreamPart*) malloc(sizeof(CachedTxDataStreamPart));
             *new_entry = entry->data_stream.part;
             entry->data_stream.part.next = new_entry;
@@ -1092,7 +1093,7 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
     return 0;
 }
 
-uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, const ubyte* data, uint size,
+uint Router::write_data_stream_bytes(far_addr_t dst, uint offset, const ubyte* data, uint size,
                                      bool force_send, ubyte stream_id, uint stream_size, ubyte broadcast_ttl,
                                      far_addr_t broadcast_src_addr, Route& route, Peer& peer) {
     auto gateway = route.gateway_addr;
