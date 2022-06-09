@@ -1,24 +1,11 @@
 # setting dirs
-#set(FRESH_EXCLUDE_MAIN true)
 if (NOT DEFINED FRESH_SOURCE_DIR) # if compiling as standalone project
     set(FRESH_SOURCE_DIR ".")
-    #set(FRESH_EXCLUDE_MAIN false)
 endif()
-#set(FRESH_EXCLUDE_MAIN true)
 
-# searching for files
-#file(GLOB_RECURSE FRESH_SRCS
-#        ${FRESH_SOURCE_DIR}/*.cpp
-#        ${FRESH_SOURCE_DIR}/*.c
-#        ${FRESH_SOURCE_DIR}/*.h
-#        ${FRESH_SOURCE_DIR}/.hpp)
-
-set(FRESH_SRCS "${FRESH_SOURCE_DIR}/mesh_controller.cpp" "${FRESH_SOURCE_DIR}/mesh_stream_builder.cpp")
-
-#if (FRESH_EXCLUDE_MAIN)
-#    list(REMOVE_ITEM FRESH_SRCS "${FRESH_SOURCE_DIR}/hello_world_main.c")
-#endif()
-list(APPEND FRESH_SRCS ${FRESH_ADDITIONAL_SRCS})
+set(FRESH_SRCS "${FRESH_SOURCE_DIR}/mesh_controller.cpp"
+               "${FRESH_SOURCE_DIR}/mesh_stream_builder.cpp"
+               ${FRESH_ADDITIONAL_SRCS})
 
 # registering component (ESP-IDF)
 if (DEFINED ESP_PLATFORM)
@@ -47,8 +34,6 @@ else()
     # link libsodium
     find_package(PkgConfig REQUIRED)
     pkg_search_module(sodium REQUIRED libsodium)
-    #set(sodium_USE_STATIC_LIBS ON)
-    #find_package(sodium REQUIRED)
     target_include_directories(${FRESH_PROJECT_NAME} PRIVATE ${sodium_INCLUDE_DIRS})
     target_link_libraries(${FRESH_PROJECT_NAME} PRIVATE ${sodium_STATIC_LIBRARIES})
 endif()

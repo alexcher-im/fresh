@@ -16,7 +16,6 @@ elseif(DEFINED ENV{IDF_PATH})
 # standalone PC project
 else()
     message(STATUS "[Fresh]: Setting up as standalone PC project")
-    #set(FRESH_ADDITIONAL_SRCS "../runner/pc.cpp")
     add_subdirectory(main)
 
 endif()
