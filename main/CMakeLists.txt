@@ -9,8 +9,16 @@ set(FRESH_SRCS "${FRESH_SOURCE_DIR}/mesh_controller.cpp"
 
 # registering component (ESP-IDF)
 if (DEFINED ESP_PLATFORM)
+
+    # interfaces for ESP-IDF
     list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/interfaces/wifi_esp_now_interface.cpp")
-    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/interfaces/pc_std_uart_interface.cpp")
+    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/interfaces/p2p_unsecured_short_interface.cpp")
+
+    # adding platform-specific cpp files
+    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/serial/stdio_serial.cpp")
+    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/serial/esp32_uart_serial_stdout.cpp")
+
+    # add component
     idf_component_register(
             SRCS ${FRESH_SRCS}
             INCLUDE_DIRS ${FRESH_SOURCE_DIR} ${FRESH_SOURCE_DIR}/interfaces
@@ -23,11 +31,19 @@ if (DEFINED ESP_PLATFORM)
 else()
     set(FRESH_PROJECT_NAME fresh_static)
     project(${FRESH_PROJECT_NAME})
-    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/interfaces/pc_std_uart_interface.cpp")
+
+    # interfaces for PC
+    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/interfaces/p2p_unsecured_short_interface.cpp")
+
+    # add platform-specific cpp files
+    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/serial/stdio_serial.cpp")
+    if (WIN32)
+        list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/serial/win32_serial.cpp")
+    endif()
 
     # add targets
     add_library(${FRESH_PROJECT_NAME} STATIC ${FRESH_SRCS})
-    target_include_directories(${FRESH_PROJECT_NAME} PUBLIC "${FRESH_SOURCE_DIR}")
+    target_include_directories(${FRESH_PROJECT_NAME} PUBLIC "${FRESH_SOURCE_DIR}" "${FRESH_SOURCE_DIR}/interfaces")
     add_executable(fresh_runner "${FRESH_SOURCE_DIR}/../runner/pc.cpp")
     target_link_libraries(fresh_runner PRIVATE ${FRESH_PROJECT_NAME})
 

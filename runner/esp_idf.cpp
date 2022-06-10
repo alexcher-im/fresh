@@ -2,7 +2,10 @@
 #include "platform/api.h"
 #include "mesh_controller.h"
 #include "wifi_esp_now_interface.h"
+#include "p2p_unsecured_short_interface.h"
 #include "mesh_stream_builder.h"
+#include "platform/serial/esp32_uart_serial_stdout.h"
+#include "platform/serial/stdio_serial.h"
 
 using namespace MeshProto;
 
@@ -13,6 +16,11 @@ extern "C" void app_main() {
     controller->set_psk_password("dev network");
     controller->user_stream_handler = [](...) {};
     controller->add_interface(wifi_interface);
+
+    StdioSerial serial_in(stdin);
+    Esp32UartSerialOut serial_out;
+    auto uart_interface = new P2PUnsecuredShortInterface(false, true, serial_in, serial_out);
+    controller->add_interface(uart_interface);
 
     printf("mesh started; sizeof(MeshController)=%d\n", (int) sizeof(MeshController));
 
