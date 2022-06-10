@@ -2,9 +2,10 @@
 
 
 #include "../mesh_base_interface.h"
+#include "platform/serial/base.h"
 
 
-namespace NsPcStdUartInterface
+namespace NsP2PUnsecuredShortInterface
 {
     class SessionManager : public MeshInterfaceSessionManager
     {
@@ -53,32 +54,28 @@ namespace NsPcStdUartInterface
 // this code can send 1 ack signal and data packet, while they both have to fit in the same 128 bytes
 // packet consists of 1 byte header+size and some payload
 // because of this, the maximum payload size is 126 bytes, and this is the MTU of this interface
-class PcStdUartInterface : public MeshInterface
+class P2PUnsecuredShortInterface : public MeshInterface
 {
 public:
     static const uint FAR_MTU = 126;
 
-    NsPcStdUartInterface::SessionManager sessions;
+    NsP2PUnsecuredShortInterface::SessionManager sessions;
     bool is_self_rx_buf_infinite;
     bool is_opponent_rx_buf_infinite;
-    FILE* read_stream;
-    FILE* write_stream;
+    BaseSerial& read_stream;
+    BaseSerial& write_stream;
 
     ubyte curr_buf[127];
     ubyte remain_read = 0;
     ubyte curr_read_amount = 0;
     bool ack_received = true; // like binary semaphore, but have no callback on someone waiting
 
-    NsPcStdUartInterface::PacketCache cache;
+    NsP2PUnsecuredShortInterface::PacketCache cache;
 
     // todo pass uart settings such as buffers size, active/passive mode
     // negative size to set unlimited buffers
-    PcStdUartInterface(bool is_self_rx_buf_infinite_, bool is_opponent_rx_buf_infinite_,
-                       FILE* read_stream_, FILE* write_stream_);
-
-    static PcStdUartInterface open_on_esp32_for_pc();
-
-    static PcStdUartInterface open_on_windows_for_esp32();
+    P2PUnsecuredShortInterface(bool is_self_rx_buf_infinite_, bool is_opponent_rx_buf_infinite_,
+                               BaseSerial& read_stream_, BaseSerial& write_stream_);
 
     void check_packets() override;
 

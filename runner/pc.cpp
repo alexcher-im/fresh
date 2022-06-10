@@ -1,5 +1,7 @@
 #include "mesh_controller.h"
 #include "mesh_stream_builder.h"
+#include "p2p_unsecured_short_interface.h"
+#include "platform/serial/win32_serial.h"
 
 using namespace MeshProto;
 
@@ -8,6 +10,10 @@ int main() {
     auto controller = new MeshController("dev net", 7768);
     controller->set_psk_password("dev network");
     controller->user_stream_handler = [](...) {};
+
+    Win32Serial serial(R"(\\.\COM6)", 115'200);
+    P2PUnsecuredShortInterface uart_interface(true, false, serial, serial);
+    controller->add_interface(&uart_interface);
 
     if (Os::random_u32() % 3 == 0) {
         printf("will send a data packet!\n");
