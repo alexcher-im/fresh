@@ -2,7 +2,7 @@
 
 
 #include "../mesh_base_interface.h"
-#include "platform/serial/base.h"
+#include "platform/p2p/base.h"
 
 
 namespace NsP2PUnsecuredShortInterface

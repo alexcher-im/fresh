@@ -1,7 +1,7 @@
 #include "mesh_controller.h"
 #include "mesh_stream_builder.h"
 #include "p2p_unsecured_short_interface.h"
-#include "platform/serial/win32_serial.h"
+#include "platform/p2p/win32_p2p.h"
 
 using namespace MeshProto;
 

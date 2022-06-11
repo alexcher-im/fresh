@@ -1,4 +1,4 @@
-#include "stdio_serial.h"
+#include "stdio_p2p.h"
 
 StdioSerial::StdioSerial(FILE* handle_) : handle(handle_) { }
 
