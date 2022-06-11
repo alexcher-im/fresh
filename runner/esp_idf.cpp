@@ -4,8 +4,8 @@
 #include "wifi_esp_now_interface.h"
 #include "p2p_unsecured_short_interface.h"
 #include "mesh_stream_builder.h"
-#include "platform/serial/esp32_uart_serial_stdout.h"
-#include "platform/serial/stdio_serial.h"
+#include "platform/p2p/esp32_uart_stdout_p2p.h"
+#include "platform/p2p/stdio_p2p.h"
 
 using namespace MeshProto;
 

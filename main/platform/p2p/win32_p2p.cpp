@@ -1,6 +1,6 @@
 #include <cstdio>
 #include <windows.h>
-#include "win32_serial.h"
+#include "win32_p2p.h"
 
 
 Win32Serial::Win32Serial(const char* name, uint baudrate) {

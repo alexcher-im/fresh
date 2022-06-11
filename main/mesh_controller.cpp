@@ -362,6 +362,8 @@ static inline bool handle_data_part_packet(MeshController& controller, PacketFar
 
     ushort offset;
     memcpy(&offset, &packet->offset, sizeof(ushort));
+    if (!offset)
+        return false;
 
     // retransmit packet if it is not for us
     if (dst != controller.self_addr && dst != BROADCAST_FAR_ADDR) {
@@ -555,6 +557,8 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
             if (interface_descr.is_secured)
                 generate_packet_signature(this, session, packet, size);
             // fixme packet can be received by insecure interface, so it has no security payload in size
+            // malloc memory if src interface is insecure and dst is secure
+            // or better - if dst_interface.is_secure and (allocated_size < size + OVERHEAD)
             interface->send_packet(phy_addr, packet, size + MESH_SECURE_PACKET_OVERHEAD);
         }
         else {

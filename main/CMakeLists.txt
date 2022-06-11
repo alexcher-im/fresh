@@ -15,8 +15,8 @@ if (DEFINED ESP_PLATFORM)
     list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/interfaces/p2p_unsecured_short_interface.cpp")
 
     # adding platform-specific cpp files
-    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/serial/stdio_serial.cpp")
-    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/serial/esp32_uart_serial_stdout.cpp")
+    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/p2p/stdio_p2p.cpp")
+    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/p2p/esp32_uart_stdout_p2p.cpp")
 
     # add component
     idf_component_register(
@@ -36,9 +36,9 @@ else()
     list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/interfaces/p2p_unsecured_short_interface.cpp")
 
     # add platform-specific cpp files
-    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/serial/stdio_serial.cpp")
+    list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/p2p/stdio_p2p.cpp")
     if (WIN32)
-        list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/serial/win32_serial.cpp")
+        list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/p2p/win32_p2p.cpp")
     endif()
 
     # add targets
