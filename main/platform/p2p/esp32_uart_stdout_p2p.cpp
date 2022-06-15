@@ -1,7 +1,13 @@
-#include <esp32/rom/uart.h>
-#include <freertos/FreeRTOS.h>
+#include <rom/uart.h>
 #include "esp32_uart_stdout_p2p.h"
 #include "types.h"
+
+
+#ifdef CONFIG_IDF_TARGET_ESP32
+#define LOCK_NAME &lock
+#else
+#define LOCK_NAME
+#endif
 
 
 void Esp32UartSerialOut::write(const void* data, size_t size) {
@@ -10,13 +16,15 @@ void Esp32UartSerialOut::write(const void* data, size_t size) {
 }
 
 Esp32UartSerialOut::Esp32UartSerialOut() {
-    vPortCPUInitializeMutex(&lock);
+    #ifdef CONFIG_IDF_TARGET_ESP32
+    vPortCPUInitializeMutex(LOCK_NAME);
+    #endif
 }
 
 void Esp32UartSerialOut::start_writing() {
-    portENTER_CRITICAL(&lock);
+    portENTER_CRITICAL(LOCK_NAME);
 }
 
 void Esp32UartSerialOut::end_writing() {
-    portEXIT_CRITICAL(&lock);
+    portEXIT_CRITICAL(LOCK_NAME);
 }

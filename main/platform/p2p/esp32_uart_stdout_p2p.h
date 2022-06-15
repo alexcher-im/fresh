@@ -2,12 +2,16 @@
 
 
 #include "base.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
 
 
 class Esp32UartSerialOut : public BaseSerial
 {
 public:
+#ifdef CONFIG_IDF_TARGET_ESP32
     portMUX_TYPE lock;
+#endif
 
     Esp32UartSerialOut();
 
