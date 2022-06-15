@@ -399,10 +399,10 @@ static inline void retransmit_packet_first_broadcast(MeshController& controller,
 
         if (size > mtu) {
             ushort stream_size;
-            memcpy(&stream_size, &curr_packet_ptr->bc_data.first.stream_size, sizeof(stream_size));
-            controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, 0, curr_packet_ptr->bc_data.first.payload,
+            memcpy(&stream_size, &curr_packet_ptr->far_data.first.stream_size, sizeof(stream_size));
+            controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, 0, curr_packet_ptr->far_data.first.payload,
                                                       payload_size, true,
-                                                      curr_packet_ptr->bc_data.first.stream_id, stream_size,
+                                                      curr_packet_ptr->far_data.first.stream_id, stream_size,
                                                       curr_packet_ptr->ttl, src_addr); // ttl already decreased
         }
 
@@ -451,10 +451,10 @@ static inline void retransmit_packet_part_broadcast(MeshController& controller, 
 
         if (size > mtu) {
             ushort offset;
-            memcpy(&offset, &curr_packet_ptr->bc_data.part_8.offset, sizeof(offset));
-            controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, offset, curr_packet_ptr->bc_data.first.payload,
+            memcpy(&offset, &curr_packet_ptr->far_data.part_8.offset, sizeof(offset));
+            controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, offset, curr_packet_ptr->far_data.first.payload,
                                                       payload_size, true,
-                                                      curr_packet_ptr->bc_data.first.stream_id, 0,
+                                                      curr_packet_ptr->far_data.first.stream_id, 0,
                                                       curr_packet_ptr->ttl, src_addr); // ttl already decreased
         }
 
@@ -504,8 +504,10 @@ MeshController::MeshController(const char* netname, far_addr_t self_addr_) : sel
 void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshPacket* packet, uint size) {
     if (!MESH_FIELD_ACCESSIBLE(type, size))
         return;
-    printf("got a packet from (" MACSTR "): type=%d, size=%d\n", MAC2STR((ubyte*) phy_addr), (int) packet->type, size);
-    fflush(stdout);
+    if (phy_addr) {
+        printf("got a packet from (" MACSTR "): type=%d, size=%d\n", MAC2STR((ubyte*) phy_addr), (int) packet->type, size);
+        fflush(stdout);
+    }
     // todo handle non-secured interfaces as well
     // todo add encryption for data streams
     auto& interface_descr = interfaces[interface_id];
@@ -640,7 +642,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
     }
 
     // retransmitting packet (some required-to-retransmit packets go further and will be retransmitted
-    //  inside it's handlers (handle_data_first_packet(), handle_data_part_packet())
+    // inside it's handlers (handle_data_first_packet(), handle_data_part_packet())
     if (dst != self_addr && dst != BROADCAST_FAR_ADDR) {
         if (!--packet->ttl)
             return;
@@ -658,8 +660,6 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
 
         router.add_route(src, tx_addr, packet->far_ping_response.routers_passed);
     }
-
-    // todo remove bc_data field to fix some memory access issues in the next 2 handlers
 
     if (packet->type == MeshPacketType::FAR_DATA_FIRST) {
         if (!MESH_FIELD_ACCESSIBLE(far_data.first, size))
