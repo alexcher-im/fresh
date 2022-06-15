@@ -1,4 +1,5 @@
 #include "mesh_controller.h"
+#include "net_utils.h"
 #include <new>
 
 
@@ -23,10 +24,10 @@ static bool generate_packet_signature(const MeshController* controller, const Pe
     auto timestamp = Os::get_microseconds();
 
     MessageHashConcatParams hash_concat_params;
-    hash_concat_params.packet_size = size;
-    memcpy(&hash_concat_params.timestamp, &timestamp, sizeof(timestamp_t));
-    memcpy(&hash_concat_params.psk, &controller->pre_shared_key, sizeof(controller->pre_shared_key));
-    memcpy(&hash_concat_params.session_key, &session->secure.session_key, sizeof(session_key_t));
+    net_store(hash_concat_params.packet_size, size);
+    net_store(hash_concat_params.timestamp, timestamp);
+    net_loadstore_nonscalar(hash_concat_params.psk, controller->pre_shared_key);
+    net_loadstore_nonscalar(hash_concat_params.session_key, session->secure.session_key);
 
     ubyte correct_signature[32];
     auto hash_ctx = Os::create_sha256();
@@ -37,8 +38,8 @@ static bool generate_packet_signature(const MeshController* controller, const Pe
     if constexpr (sizeof(hashdigest_t) > sizeof(correct_signature))
         memset((ubyte*) &sign->hash + sizeof(correct_signature), 0, sizeof(correct_signature) - sizeof(hashdigest_t));
 
-    memcpy(&sign->hash, correct_signature, std::min(sizeof(correct_signature), sizeof(hashdigest_t)));
-    memcpy(&sign->timestamp, &timestamp, sizeof(timestamp_t));
+    net_memcpy(&sign->hash, correct_signature, std::min(sizeof(correct_signature), sizeof(hashdigest_t)));
+    net_loadstore_nonscalar(sign->timestamp, timestamp);
     return true;
 }
 
@@ -126,7 +127,8 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         // generating response packet
         auto packet_size = MESH_CALC_SIZE(near_hello_init);
         auto init_packet = interface->alloc_near_packet(MeshPacketType::NEAR_HELLO_INIT, packet_size);
-        memcpy(&init_packet->near_hello_init.member_nonce, &est_session->peer_nonce, sizeof(nonce_t));
+        net_loadstore_nonscalar(init_packet->near_hello_init.member_nonce, est_session->peer_nonce);
+
         interface->send_packet(phy_addr, init_packet, packet_size);
         interface->free_near_packet(init_packet);
         printf("time after hello handler: %llu\n", Os::get_microseconds());
@@ -152,19 +154,19 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         // generating response packet
         auto packet_size = MESH_CALC_SIZE(near_hello_authorize);
         auto auth_packet = interface->alloc_near_packet(MeshPacketType::HEAR_HELLO_AUTHORIZE, packet_size);
-        memcpy(&auth_packet->near_hello_authorize.session_key, &est_session->session_info.session_key, sizeof(session_key_t));
-        memcpy(&auth_packet->near_hello_authorize.self_far_addr, &controller.self_addr, sizeof(far_addr_t));
-        auth_packet->near_hello_authorize.initial_timestamp = Os::get_microseconds();
+        net_loadstore_nonscalar(auth_packet->near_hello_authorize.session_key, est_session->session_info.session_key);
+        net_store(auth_packet->near_hello_authorize.self_far_addr, controller.self_addr);
+        net_store(auth_packet->near_hello_authorize.initial_timestamp, Os::get_microseconds());
 
         // generating hash (packet sign)
         ubyte hash_digest[32];
         auto hash_src_size = offsetof(MeshPacket, near_hello_authorize.hash) + sizeof(controller.pre_shared_key);
         ubyte hash_src[hash_src_size];
-        memcpy(hash_src, auth_packet, offsetof(MeshPacket, near_hello_authorize.hash));
+        net_memcpy(hash_src, auth_packet, offsetof(MeshPacket, near_hello_authorize.hash));
         memcpy(&hash_src[offsetof(MeshPacket, near_hello_authorize.hash)], &controller.pre_shared_key, sizeof(controller.pre_shared_key));
         Os::sha256(hash_src, hash_src_size, hash_digest);
 
-        memcpy(&auth_packet->near_hello_authorize.hash, hash_digest, sizeof(hashdigest_t));
+        net_memcpy(&auth_packet->near_hello_authorize.hash, hash_digest, sizeof(hashdigest_t));
 
         // send
         interface->send_packet(phy_addr, auth_packet, packet_size);
@@ -185,11 +187,11 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         ubyte hash_digest[32];
         auto hash_src_size = offsetof(MeshPacket, near_hello_authorize.hash) + sizeof(controller.pre_shared_key);
         ubyte hash_src[hash_src_size];
-        memcpy(hash_src, packet, offsetof(MeshPacket, near_hello_authorize.hash));
+        net_memcpy(hash_src, packet, offsetof(MeshPacket, near_hello_authorize.hash));
         memcpy(&hash_src[offsetof(MeshPacket, near_hello_authorize.hash)], &controller.pre_shared_key, sizeof(controller.pre_shared_key));
         Os::sha256(hash_src, hash_src_size, hash_digest);
 
-        if (memcmp(hash_digest, &packet->near_hello_authorize.hash, sizeof(hashdigest_t)))
+        if (!!net_memcmp(hash_digest, &packet->near_hello_authorize.hash, sizeof(hashdigest_t)))
             return;
 
         // checks
@@ -198,29 +200,30 @@ static inline void handle_near_secure(MeshController& controller, uint interface
 
         // setting session
         auto session = interface_descr.sessions->get_or_create_session(phy_addr);
-        memcpy(&session->secure.session_key, &packet->near_hello_authorize.session_key, sizeof(session_key_t));
-        memcpy(&session->secure.prev_peer_timestamp, &packet->near_hello_authorize.initial_timestamp, sizeof(timestamp_t));
-        memcpy(&session->secure.peer_far_addr, &packet->near_hello_authorize.self_far_addr, sizeof(far_addr_t));
+        net_loadstore_nonscalar(session->secure.session_key, packet->near_hello_authorize.session_key);
+        session->secure.peer_far_addr = net_load(packet->near_hello_authorize.self_far_addr);
+        session->secure.prev_peer_timestamp = net_load(packet->near_hello_authorize.initial_timestamp);
 
         // generating response packet
         auto packet_size = MESH_CALC_SIZE(near_hello_joined_secure);
         auto joined_packet = interface->alloc_near_packet(MeshPacketType::NEAR_HELLO_JOINED, packet_size);
-        joined_packet->near_hello_joined_secure.initial_timestamp = Os::get_microseconds();
-        memcpy(&joined_packet->near_hello_joined_secure.self_far_addr, &controller.self_addr, sizeof(far_addr_t));
+        net_store(joined_packet->near_hello_joined_secure.initial_timestamp, Os::get_microseconds());
+        net_store(joined_packet->near_hello_joined_secure.self_far_addr, controller.self_addr);
 
         // generating hash (packet sign)
         auto hash_j_size = offsetof(MeshPacket, near_hello_joined_secure.hash) + sizeof(controller.pre_shared_key);
         ubyte hash_j[hash_j_size];
-        memcpy(hash_j, joined_packet, offsetof(MeshPacket, near_hello_joined_secure.hash));
+        net_memcpy(hash_j, joined_packet, offsetof(MeshPacket, near_hello_joined_secure.hash));
         memcpy(&hash_j[offsetof(MeshPacket, near_hello_joined_secure.hash)], &controller.pre_shared_key, sizeof(controller.pre_shared_key));
         Os::sha256(hash_j, hash_j_size, hash_digest);
 
-        memcpy(&joined_packet->near_hello_joined_secure.hash, hash_digest, sizeof(hashdigest_t));
+        net_memcpy(&joined_packet->near_hello_joined_secure.hash, hash_digest, sizeof(hashdigest_t));
 
         // send
         interface->send_packet(phy_addr, joined_packet, packet_size);
         interface->free_near_packet(joined_packet);
 
+        // registering peer and removing session establishment info
         interface_descr.sessions->remove_est_session(phy_addr);
         printf("time after auth handler: %llu\n", Os::get_microseconds());
         printf("peer session done: from auth (other addr: %d)\n", session->secure.peer_far_addr);
@@ -242,11 +245,11 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         ubyte hash_digest[32];
         auto hash_j_size = offsetof(MeshPacket, near_hello_joined_secure.hash) + sizeof(controller.pre_shared_key);
         ubyte hash_src[hash_j_size];
-        memcpy(hash_src, packet, offsetof(MeshPacket, near_hello_joined_secure.hash));
+        net_memcpy(hash_src, packet, offsetof(MeshPacket, near_hello_joined_secure.hash));
         memcpy(&hash_src[offsetof(MeshPacket, near_hello_joined_secure.hash)], &controller.pre_shared_key, sizeof(controller.pre_shared_key));
         Os::sha256(hash_src, hash_j_size, hash_digest);
 
-        if (memcmp(hash_digest, &packet->near_hello_joined_secure.hash, sizeof(hashdigest_t)))
+        if (!!net_memcmp(hash_digest, &packet->near_hello_joined_secure.hash, sizeof(hashdigest_t)))
             return;
 
         // checks
@@ -255,9 +258,9 @@ static inline void handle_near_secure(MeshController& controller, uint interface
 
         // setting session
         auto session = interface_descr.sessions->get_or_create_session(phy_addr);
-        memcpy(&session->secure.peer_far_addr, &packet->near_hello_joined_secure.self_far_addr, sizeof(far_addr_t));
-        memcpy(&session->secure.prev_peer_timestamp, &packet->near_hello_joined_secure.initial_timestamp, sizeof(timestamp_t));
-        memcpy(&session->secure.session_key, &est_session->session_info.session_key, sizeof(session_key_t));
+        net_loadstore_nonscalar(session->secure.session_key, est_session->session_info.session_key);
+        session->secure.peer_far_addr = net_load(packet->near_hello_joined_secure.self_far_addr);
+        session->secure.prev_peer_timestamp = net_load(packet->near_hello_joined_secure.initial_timestamp);
 
         interface_descr.sessions->remove_est_session(phy_addr);
         printf("time after joined handler: %llu\n", Os::get_microseconds());
@@ -275,23 +278,23 @@ static inline void handle_near_insecure(MeshController& controller, uint interfa
 
     if (packet->type == MeshPacketType::NEAR_HELLO) {
         auto session = interface_descr.sessions->get_or_create_session(phy_addr);
-        memcpy(&session->insecure.peer_far_addr, &packet->near_hello_insecure.self_far_addr, sizeof(far_addr_t));
+        session->insecure.peer_far_addr = net_load(packet->near_hello_insecure.self_far_addr);
 
         if (!interface->accept_near_packet(phy_addr, packet, size)) {
-            // todo add a peer in controller.router
             return;
         }
+        // todo add a peer in controller.router
 
         auto packet_size = MESH_CALC_SIZE(near_hello_joined_insecure);
         auto joined_packet = interface->alloc_near_packet(MeshPacketType::NEAR_HELLO_JOINED, packet_size);
-        memcpy(&joined_packet->near_hello_joined_insecure.self_far_addr, &controller.self_addr, sizeof(far_addr_t));
+        net_store(joined_packet->near_hello_joined_insecure.self_far_addr, controller.self_addr);
         interface->send_packet(phy_addr, joined_packet, packet_size);
         interface->free_near_packet(joined_packet);
     }
 
     else if (packet->type == MeshPacketType::NEAR_HELLO_JOINED) {
         auto session = interface_descr.sessions->get_or_create_session(phy_addr);
-        memcpy(&session->insecure.peer_far_addr, &packet->near_hello_joined_insecure.self_far_addr, sizeof(far_addr_t));
+        session->insecure.peer_far_addr = net_load(packet->near_hello_joined_insecure.self_far_addr);
     }
 }
 
@@ -310,25 +313,25 @@ static inline void add_rx_data_packet_to_cache(MeshController& controller, DataS
     entry.size = size;
     entry.data = (ubyte*) malloc(size);
     entry.broadcast_ttl = broadcast_ttl;
-    memcpy(entry.data, data, size);
+    net_memcpy(entry.data, data, size);
 }
 
 static inline bool handle_data_first_packet(MeshController& controller, PacketFarDataFirst* packet, uint payload_size,
                                             far_addr_t src, far_addr_t dst) {
-    decltype(packet->stream_size) stream_size;
-    memcpy(&stream_size, &packet->stream_size, sizeof(stream_size));
+    auto stream_size = net_load(packet->stream_size);
 
     // retransmit packet if it is not for us
     if (dst != controller.self_addr && dst != BROADCAST_FAR_ADDR) {
-        controller.router.write_data_stream_bytes(dst, 0, packet->payload,
-                                                  payload_size, true, packet->stream_id, stream_size, 0, src);
+        controller.router.write_data_stream_bytes(dst, 0, packet->payload, payload_size, true,
+                                                  net_load(packet->stream_id),
+                                                  net_load(packet->stream_size), 0, src);
         return false;
     }
 
     // fast path: do not create stream if it will be single-packet
     if (payload_size >= stream_size && dst != BROADCAST_FAR_ADDR) {
         auto stream_content = (ubyte*) malloc(stream_size);
-        memcpy(stream_content, packet->payload, stream_size);
+        net_memcpy(stream_content, packet->payload, stream_size);
         compete_data_stream(controller, stream_content, stream_size, src, dst);
         return true;
     }
@@ -337,7 +340,7 @@ static inline bool handle_data_first_packet(MeshController& controller, PacketFa
         DataStreamIdentity identity;
         identity.src_addr = src;
         identity.dst_addr = dst;
-        identity.stream_id = packet->stream_id;
+        identity.stream_id = net_load(packet->stream_id);
         auto& stream = controller.data_streams.try_emplace(identity, stream_size, Os::get_microseconds()).first->second;
 
         auto result = stream.add_data(0, packet->payload, payload_size);
@@ -353,15 +356,14 @@ static inline bool handle_data_part_packet(MeshController& controller, PacketFar
     identity.dst_addr = dst;
     identity.stream_id = packet->stream_id;
 
-    ushort offset;
-    memcpy(&offset, &packet->offset, sizeof(ushort));
+    auto offset = net_load(packet->offset);
     if (!offset)
         return false;
 
     // retransmit packet if it is not for us
     if (dst != controller.self_addr && dst != BROADCAST_FAR_ADDR) {
-        controller.router.write_data_stream_bytes(dst, offset, packet->payload,
-                                                  payload_size, true, packet->stream_id, 0, 0, src);
+        controller.router.write_data_stream_bytes(dst, offset, packet->payload, payload_size, true,
+                                                  net_load(packet->stream_id), 0, 0, src);
         return false;
     }
 
@@ -398,12 +400,11 @@ static inline void retransmit_packet_first_broadcast(MeshController& controller,
         auto curr_packet_ptr = oversize_storage ? oversize_storage : packet;
 
         if (size > mtu) {
-            ushort stream_size;
-            memcpy(&stream_size, &curr_packet_ptr->far_data.first.stream_size, sizeof(stream_size));
             controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, 0, curr_packet_ptr->far_data.first.payload,
                                                       payload_size, true,
-                                                      curr_packet_ptr->far_data.first.stream_id, stream_size,
-                                                      curr_packet_ptr->ttl, src_addr); // ttl already decreased
+                                                      net_load(curr_packet_ptr->far_data.first.stream_id),
+                                                      net_load(curr_packet_ptr->far_data.first.stream_size),
+                                                      net_load(curr_packet_ptr->ttl), src_addr); // ttl already decreased
         }
 
         else {
@@ -413,7 +414,7 @@ static inline void retransmit_packet_first_broadcast(MeshController& controller,
                 // creating oversize_storage if required and not created earlier
                 if (size + MESH_SECURE_PACKET_OVERHEAD > allocated_packet_size && !oversize_storage) {
                     oversize_storage = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD);
-                    memcpy(curr_packet_ptr, packet, size);
+                    net_memcpy(curr_packet_ptr, packet, size);
                     curr_packet_ptr = oversize_storage;
                 }
 
@@ -450,12 +451,11 @@ static inline void retransmit_packet_part_broadcast(MeshController& controller, 
         auto curr_packet_ptr = oversize_storage ? oversize_storage : packet;
 
         if (size > mtu) {
-            ushort offset;
-            memcpy(&offset, &curr_packet_ptr->far_data.part_8.offset, sizeof(offset));
-            controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, offset, curr_packet_ptr->far_data.first.payload,
+            controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, net_load(curr_packet_ptr->far_data.part_8.offset),
+                                                      curr_packet_ptr->far_data.first.payload,
                                                       payload_size, true,
-                                                      curr_packet_ptr->far_data.first.stream_id, 0,
-                                                      curr_packet_ptr->ttl, src_addr); // ttl already decreased
+                                                      net_load(curr_packet_ptr->far_data.first.stream_id), 0,
+                                                      net_load(curr_packet_ptr->ttl), src_addr); // ttl already decreased
         }
 
         else {
@@ -465,7 +465,7 @@ static inline void retransmit_packet_part_broadcast(MeshController& controller, 
                 // creating oversize_storage if required and not created earlier
                 if (size + MESH_SECURE_PACKET_OVERHEAD > allocated_packet_size && !oversize_storage) {
                     oversize_storage = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD);
-                    memcpy(curr_packet_ptr, packet, size);
+                    net_memcpy(curr_packet_ptr, packet, size);
                     curr_packet_ptr = oversize_storage;
                 }
 
@@ -482,7 +482,7 @@ static inline void retransmit_packet_part_broadcast(MeshController& controller, 
 
     if (oversize_storage)
         free(oversize_storage); // yes, free(nullptr) is valid and compilers may emit this if, but i'd better
-    // do it manually to make sure unnecessary function call optimized out
+                                // do it manually to make sure unnecessary function call optimized out
 }
 
 
@@ -516,10 +516,11 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
     far_addr_t tx_addr;
     PeerSessionInfo* session;
     uint allocated_packet_size = size;
+    auto packet_type = net_load(packet->type);
 
     // gathering secure/insecure session info and checking packet signature
     if (interface_descr.is_secured) {
-        if (packet->type >= MeshPacketType::FIRST_NEAR_PACKET_NUM) {
+        if (packet_type >= MeshPacketType::FIRST_NEAR_PACKET_NUM) {
             handle_near_secure(*this, interface_id, phy_addr, packet, size);
             return;
         }
@@ -534,10 +535,9 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
             return;
         auto sign = (MessageSign*) ((ubyte*) packet + sign_offset);
 
-        timestamp_t timestamp;
+        auto timestamp = net_load(sign->timestamp);
         hashdigest_t packet_signature;
-        memcpy(&timestamp, &sign->timestamp, sizeof(timestamp_t));
-        memcpy(&packet_signature, &sign->hash, sizeof(hashdigest_t));
+        net_memcpy(&packet_signature, &sign->hash, sizeof(hashdigest_t));
         tx_addr = session->secure.peer_far_addr;
 
         if (timestamp < session->secure.prev_peer_timestamp)
@@ -545,9 +545,9 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
 
         MessageHashConcatParams hash_concat_params;
         hash_concat_params.packet_size = sign_offset;
-        memcpy(&hash_concat_params.timestamp, &timestamp, sizeof(timestamp_t));
-        memcpy(&hash_concat_params.psk, &pre_shared_key, sizeof(pre_shared_key));
-        memcpy(&hash_concat_params.session_key, &session->secure.session_key, sizeof(session_key_t));
+        net_store(hash_concat_params.timestamp, timestamp);
+        net_loadstore_nonscalar(hash_concat_params.psk, pre_shared_key);
+        net_loadstore_nonscalar(hash_concat_params.session_key, session->secure.session_key);
 
         ubyte correct_signature[32];
         auto hash_ctx = Os::create_sha256();
@@ -555,18 +555,18 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
         Os::update_sha256(&hash_ctx, &hash_concat_params, sizeof(MessageHashConcatParams));
         Os::finish_sha256(&hash_ctx, correct_signature);
 
-        if (!!memcmp(&correct_signature, &packet_signature, std::min(sizeof(hashdigest_t), sizeof(correct_signature))))
+        if (!!net_memcmp(&correct_signature, &packet_signature, std::min(sizeof(hashdigest_t), sizeof(correct_signature))))
             return;
 
         printf("packet hash correct!\n");
         fflush(stdout);
 
         // finish
-        memcpy(&session->secure.prev_peer_timestamp, &timestamp, sizeof(timestamp_t));
+        session->secure.prev_peer_timestamp = timestamp;
         size = sign_offset;
     }
     else {
-        if (packet->type >= MeshPacketType::FIRST_NEAR_PACKET_NUM) {
+        if (packet_type >= MeshPacketType::FIRST_NEAR_PACKET_NUM) {
             handle_near_insecure(*this, interface_id, phy_addr, packet, size);
             return;
         }
@@ -578,7 +578,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
     }
 
     // check optimized far data packets
-    if (packet->type == MeshPacketType::FAR_OPTIMIZED_DATA_FIRST) {
+    if (packet_type == MeshPacketType::FAR_OPTIMIZED_DATA_FIRST) {
         if (!MESH_FIELD_ACCESSIBLE(opt_data.first, size))
             return;
 
@@ -587,7 +587,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
         return;
     }
 
-    if (packet->type == MeshPacketType::FAR_OPTIMIZED_DATA_PART) {
+    if (packet_type == MeshPacketType::FAR_OPTIMIZED_DATA_PART) {
         if (!MESH_FIELD_ACCESSIBLE(opt_data.part_8, size))
             return;
 
@@ -599,10 +599,8 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
     // parse common far packets
     if (!MESH_FIELD_ACCESSIBLE(dst_addr, size))
         return;
-    far_addr_t src;
-    far_addr_t dst;
-    memcpy(&src, &packet->src_addr, sizeof(far_addr_t)); // memcpy because packet memory can be unaligned
-    memcpy(&dst, &packet->dst_addr, sizeof(far_addr_t));
+    far_addr_t src = net_load(packet->src_addr);
+    far_addr_t dst = net_load(packet->dst_addr);
 
     if (src == self_addr)
         return;
@@ -610,23 +608,20 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
     if (packet->type == MeshPacketType::FAR_PING) {
         if (!MESH_FIELD_ACCESSIBLE(far_ping, size))
             return;
-        if (!--packet->ttl)
+        if (!net_pre_decrement(packet->ttl))
             return;
 
-        ushort min_mtu;
-        memcpy(&min_mtu, &packet->far_ping.min_mtu, sizeof(min_mtu));
-        if (interface_descr.mtu < packet->far_ping.min_mtu) {
-            memcpy(&packet->far_ping.min_mtu, &interface_descr.mtu, sizeof(interface_descr.mtu));
-            packet->far_ping.min_mtu = interface_descr.mtu;
-            packet->far_ping.router_num_with_min_mtu = packet->far_ping.routers_passed;
+        if (interface_descr.mtu < net_load(packet->far_ping.min_mtu)) {
+            net_store(packet->far_ping.min_mtu, interface_descr.mtu);
+            net_store(packet->far_ping.router_num_with_min_mtu, packet->far_ping.routers_passed);
         }
-        ++packet->far_ping.routers_passed;
+        net_pre_increment(packet->far_ping.routers_passed);
 
         if (dst == self_addr) {
-            packet->type = MeshPacketType::FAR_PING_RESPONSE;
-            packet->ttl = packet->far_ping.routers_passed + 1; // the "perfect" ttl, based on route length
-            memcpy(&packet->dst_addr, &packet->src_addr, sizeof(far_addr_t));
-            memcpy(&packet->src_addr, &self_addr, sizeof(far_addr_t));
+            net_store(packet->type, MeshPacketType::FAR_PING_RESPONSE);
+            net_store(packet->ttl, (decltype(packet->ttl)) (packet->far_ping.routers_passed + 1)); // the "perfect" ttl, based on route length
+            net_store(packet->dst_addr, packet->src_addr);
+            net_store(packet->src_addr, self_addr);
 
             if (interface_descr.is_secured)
                 generate_packet_signature(this, session, packet, size);
@@ -637,14 +632,14 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
             //
         }
 
-        router.add_route(src, tx_addr, packet->far_ping.routers_passed);
+        router.add_route(src, tx_addr, net_load(packet->far_ping.routers_passed));
         return;
     }
 
     // retransmitting packet (some required-to-retransmit packets go further and will be retransmitted
     // inside it's handlers (handle_data_first_packet(), handle_data_part_packet())
     if (dst != self_addr && dst != BROADCAST_FAR_ADDR) {
-        if (!--packet->ttl)
+        if (!net_pre_decrement(packet->ttl))
             return;
 
         // retransmit if packet fits the peers MTU (any non-data packet do)
@@ -655,7 +650,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
     if (packet->type == MeshPacketType::FAR_PING_RESPONSE) {
         if (!MESH_FIELD_ACCESSIBLE(far_ping_response, size))
             return;
-        if (!--packet->ttl)
+        if (!net_pre_decrement(packet->ttl))
             return;
 
         router.add_route(src, tx_addr, packet->far_ping_response.routers_passed);
@@ -664,7 +659,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
     if (packet->type == MeshPacketType::FAR_DATA_FIRST) {
         if (!MESH_FIELD_ACCESSIBLE(far_data.first, size))
             return;
-        if (!--packet->ttl)
+        if (!net_pre_decrement(packet->ttl))
             return;
 
         auto payload_size = size - MESH_CALC_SIZE(far_data.first.payload);
@@ -677,7 +672,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
     if (packet->type == MeshPacketType::FAR_DATA_PART) {
         if (!MESH_FIELD_ACCESSIBLE(far_data.part_8, size))
             return;
-        if (!--packet->ttl)
+        if (!net_pre_decrement(packet->ttl))
             return;
 
         auto payload_size = size - MESH_CALC_SIZE(far_data.part_8.payload);
@@ -781,8 +776,7 @@ void Router::add_route(far_addr_t dst, far_addr_t gateway, ubyte distance) {
 bool Router::send_packet(MeshPacket* packet, uint size, uint available_size) {
     // there are no broadcast packets, except for data packets, that are sent by another function
 
-    far_addr_t dst_addr;
-    memcpy(&dst_addr, &packet->dst_addr, sizeof(far_addr_t));
+    far_addr_t dst_addr = net_load(packet->dst_addr);
 
     // routing table lookup
     auto route_iter = routes.find(dst_addr);
@@ -790,7 +784,7 @@ bool Router::send_packet(MeshPacket* packet, uint size, uint available_size) {
     if (route_iter == routes.end()) {
         // save the packet
         auto saved_packet = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD);
-        memcpy(saved_packet, packet, size);
+        net_memcpy(saved_packet, packet, size);
         packet_cache.add_tx_packet(dst_addr, {saved_packet, size});
 
         // discover the route
@@ -805,14 +799,14 @@ bool Router::send_packet(MeshPacket* packet, uint size, uint available_size) {
     if (route_iter->second.state == RouteState::INSPECTING) {
         // save the packet
         auto saved_packet = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD);
-        memcpy(saved_packet, packet, size);
+        net_memcpy(saved_packet, packet, size);
         packet_cache.add_tx_packet(dst_addr, {saved_packet, size});
         return true;
     }
 
     // routing table lookup
     auto gateway_far_addr = route_iter->second.routes[0].gateway_addr;
-    packet->ttl = route_iter->second.routes[0].distance + 1;
+    net_store(packet->ttl, route_iter->second.routes[0].distance + 1);
 
     // peer table lookup
     auto interface = peers[gateway_far_addr].interface;
@@ -830,7 +824,7 @@ bool Router::send_packet(MeshPacket* packet, uint size, uint available_size) {
         // if no space for security payload
         if (available_size - size < MESH_SECURE_PACKET_OVERHEAD) {
             auto new_packet = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD); // todo should use manual fast allocator
-            memcpy(new_packet, packet, size);
+            net_memcpy(new_packet, packet, size);
             packet = new_packet;
             needs_free = true;
         }
@@ -854,12 +848,12 @@ bool Router::send_packet(MeshPacket* packet, uint size, uint available_size) {
 
 void Router::discover_route(far_addr_t dst) {
     auto far_ping = (MeshPacket*) malloc(MESH_CALC_SIZE(far_ping) + MESH_SECURE_PACKET_OVERHEAD);
-    far_ping->type = MeshPacketType::FAR_PING;
-    far_ping->ttl = CONTROLLER_DEFAULT_PACKET_TTL;
-    far_ping->far_ping.routers_passed = 0;
-    far_ping->far_ping.router_num_with_min_mtu = 0;
-    memcpy(&far_ping->src_addr, &controller.self_addr, sizeof(far_addr_t));
-    memcpy(&far_ping->dst_addr, &dst, sizeof(far_addr_t));
+    net_store(far_ping->type, MeshPacketType::FAR_PING);
+    net_store(far_ping->ttl, CONTROLLER_DEFAULT_PACKET_TTL);
+    net_store(far_ping->far_ping.routers_passed, 0);
+    net_store(far_ping->far_ping.router_num_with_min_mtu, 0);
+    net_store(far_ping->src_addr, controller.self_addr);
+    net_store(far_ping->dst_addr, dst);
 
     for (auto& [far, peer] : peers) {
         auto peer_list = &peer;
@@ -867,7 +861,7 @@ void Router::discover_route(far_addr_t dst) {
         while (peer_list) {
             auto interface = peer_list->interface;
             auto interface_descr = controller.interfaces[interface->id];
-            memcpy(&far_ping->far_ping.min_mtu, &interface_descr.mtu, sizeof(interface_descr.mtu));
+            net_store(far_ping->far_ping.min_mtu, interface_descr.mtu);
             auto phy_addr = interface_descr.sessions->get_phy_addr(far);
 
             if (interface_descr.is_secured) {
@@ -905,6 +899,8 @@ auto Router::check_packet_cache(decltype(packet_cache.tx_cache)::iterator cache_
 
                 while (curr_part) {
                     // fixme this is not optimal to set force_send=true on part packets, however it is a rare case
+                    //  (maybe create a temporary buffer for accumulating unsent data and try to merge new data in it?)
+                    //  ugh please no, it's not worth it, i think
                     write_data_stream_bytes(dst, curr_part->offset, curr_part->data, curr_part->size,
                                             true, entry->data_stream.stream_id, entry->data_stream.stream_size, 0, {},
                                             route.routes[0], peer);
@@ -1033,11 +1029,14 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
                                      far_addr_t broadcast_src_addr) {
     if (dst == BROADCAST_FAR_ADDR) {
         Route tmp_route;
+        uint min_bytes_written = 0;
         for (auto& [peer_addr, peer] : peers) {
             tmp_route.gateway_addr = peer_addr;
-            return write_data_stream_bytes(dst, offset, data, size, force_send, stream_id, stream_size, broadcast_ttl,
-                                           broadcast_src_addr, tmp_route, peer);
+            auto current_written = write_data_stream_bytes(dst, offset, data, size, force_send, stream_id, stream_size,
+                                                           broadcast_ttl, broadcast_src_addr, tmp_route, peer);
+            min_bytes_written = std::min(min_bytes_written, current_written);
         }
+        return min_bytes_written;
     }
 
     auto route = routes[dst];
@@ -1161,9 +1160,9 @@ uint Router::write_data_stream_bytes(far_addr_t dst, uint offset, const ubyte* d
         part_packet_type = MeshPacketType::FAR_DATA_PART;
         data_ptr = &packet->far_data;
 
-        memcpy(&packet->src_addr, dst == BROADCAST_FAR_ADDR ? &broadcast_src_addr : &controller.self_addr, sizeof(far_addr_t));
-        memcpy(&packet->dst_addr, &dst, sizeof(far_addr_t));
-        packet->ttl = dst == BROADCAST_FAR_ADDR ? broadcast_ttl : route.distance + 1;
+        net_store(packet->src_addr, dst == BROADCAST_FAR_ADDR ? broadcast_src_addr : controller.self_addr);
+        net_store(packet->dst_addr, dst);
+        net_store(packet->ttl, dst == BROADCAST_FAR_ADDR ? broadcast_ttl : route.distance + 1);
     }
 
     auto data_offset = (ubyte*) data_ptr - (ubyte*) packet;
@@ -1184,15 +1183,15 @@ uint Router::write_data_stream_bytes(far_addr_t dst, uint offset, const ubyte* d
 
         // for first/part
         if (offset == 0) { // first packet
-            packet->type = first_packet_type;
-            data_ptr->first.stream_id = stream_id;
-            memcpy(&data_ptr->first.stream_size, &stream_size, sizeof(data_ptr->first.stream_size));
-            memcpy(&data_ptr->first.payload, data, chunk_size);
+            net_store(packet->type, first_packet_type);
+            net_store(data_ptr->first.stream_id, stream_id);
+            net_store(data_ptr->first.stream_size, stream_size);
+            net_memcpy(&data_ptr->first.payload, data, chunk_size);
         }
         else { // part packet
-            packet->type = part_packet_type;
-            data_ptr->part_8.stream_id = stream_id;
-            memcpy(&data_ptr->part_8.offset, &offset, sizeof(data_ptr->part_8.offset));
+            net_store(packet->type, part_packet_type);
+            net_store(data_ptr->part_8.stream_id, stream_id);
+            net_store(data_ptr->part_8.offset, offset);
             memcpy(&data_ptr->part_8.payload, data, chunk_size);
         }
 
@@ -1235,7 +1234,7 @@ bool NsMeshController::DataStream::add_data(ushort offset, const ubyte* data, us
         return false;
     if (!remake_parts(offset, offset + size))
         return false;
-    memcpy(&stream_data[offset], data, size);
+    net_memcpy(&stream_data[offset], data, size);
     return true;
 }
 

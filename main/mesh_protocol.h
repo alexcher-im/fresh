@@ -150,7 +150,7 @@ namespace MeshProto
         ubyte routers_passed;
         // mtu discovery data:
         ubyte router_num_with_min_mtu;
-        ushort min_mtu;
+        uint min_mtu;
     };
 
     struct PacketFarPingResponse : public PacketFarPing

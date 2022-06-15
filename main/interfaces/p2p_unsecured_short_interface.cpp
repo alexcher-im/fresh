@@ -2,6 +2,7 @@
 #include <cassert>
 #include "mesh_controller.h"
 #include "p2p_unsecured_short_interface.h"
+#include "net_utils.h"
 
 
 using namespace MeshProto;
@@ -56,7 +57,7 @@ bool P2PUnsecuredShortInterface::accept_near_packet(MeshPhyAddrPtr phy_addr, con
 
 MeshPacket* P2PUnsecuredShortInterface::alloc_near_packet(MeshPacketType type, uint size) {
     auto packet = (MeshPacket*) malloc(size);
-    packet->type = type;
+    net_store(packet->type, type);
     return packet;
 }
 
@@ -88,8 +89,8 @@ MeshInterfaceProps P2PUnsecuredShortInterface::get_props() {
 
 void P2PUnsecuredShortInterface::send_hello(MeshPhyAddrPtr phy_addr) {
     auto packet = (MeshPacket*) alloca(MESH_CALC_SIZE(near_hello_secure));
-    packet->type = MeshPacketType::NEAR_HELLO;
-    memcpy(packet->near_hello_secure.network_name, controller->network_name, sizeof(controller->network_name));
+    net_store(packet->type, MeshPacketType::NEAR_HELLO);
+    net_memcpy(packet->near_hello_secure.network_name, controller->network_name, sizeof(controller->network_name));
 
     send_packet(phy_addr, packet, MESH_CALC_SIZE(near_hello_secure));
 }
@@ -129,7 +130,7 @@ void NsP2PUnsecuredShortInterface::PacketCache::add_entry(const void* data, ubyt
     auto new_entry = (CacheEntry*) malloc(sizeof(CacheEntry));
     new_entry->data = malloc(size);
     new_entry->size = size;
-    memcpy(new_entry->data, data, size);
+    net_memcpy(new_entry->data, data, size);
 
     if (last_entry) {
         last_entry->next = new_entry;

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <nvs_flash.h>
 #include "../hashes.h"
+#include "net_utils.h"
 
 
 using namespace NsWifiEspNowInterface;
@@ -100,14 +101,14 @@ void WifiEspNowMeshInterface::check_packets() {
         if (self_addr == data.mac)
             goto packet_end;
 
-        if (packet->type == MeshPacketType::NEAR_HELLO_INIT) {
+        if (net_load(packet->type) == MeshPacketType::NEAR_HELLO_INIT) {
             // packet size check
             printf("packet size check: got %d\n", data.size);
             if ((ubyte*) ((MacAddr*) packet->near_hello_init.interface_payload + 1) - (ubyte*) packet > data.size)
                 goto packet_end;
 
             printf("packet addr check\n");
-            if (*(MacAddr*)packet->near_hello_init.interface_payload != self_addr)
+            if (net_load(*(MacAddr*)packet->near_hello_init.interface_payload) != self_addr)
                 goto packet_end;
             data.size -= sizeof(MacAddr);
         }
@@ -133,7 +134,7 @@ MeshPacket* WifiEspNowMeshInterface::alloc_near_packet(MeshPacketType type, uint
     if (type == MeshPacketType::NEAR_HELLO_INIT)
         size += sizeof(MacAddr);
     auto mem = (MeshPacket*) malloc(size);
-    mem->type = type;
+    net_store(mem->type, type);
     return mem;
 }
 
@@ -152,7 +153,7 @@ void WifiEspNowMeshInterface::free_near_packet(MeshPacket* packet) {
 void WifiEspNowMeshInterface::send_packet(MeshPhyAddrPtr phy_addr, const MeshProto::MeshPacket* packet, uint size) {
     if (packet->type == MeshPacketType::NEAR_HELLO_INIT) {
         size += sizeof(MacAddr);
-        *(MacAddr*) packet->near_hello_init.interface_payload = *(MacAddr*) phy_addr;
+        net_memcpy((MacAddr*) packet->near_hello_init.interface_payload, phy_addr, sizeof(MacAddr));
         phy_addr = (MeshPhyAddrPtr) BROADCAST_MAC;
         printf("hello init broadcast sent (size=%d)\n", size);
     }
@@ -189,7 +190,7 @@ void WifiEspNowMeshInterface::send_hello(MeshPhyAddrPtr phy_addr) {
         phy_addr = (MeshPhyAddrPtr) BROADCAST_MAC;
 
     auto packet = (MeshPacket*) alloca(MESH_CALC_SIZE(near_hello_secure));
-    packet->type = MeshPacketType::NEAR_HELLO;
+    net_store(packet->type, MeshPacketType::NEAR_HELLO);
     memcpy(packet->near_hello_secure.network_name, controller->network_name, sizeof(controller->network_name));
 
     send_packet(phy_addr, packet, MESH_CALC_SIZE(near_hello_secure));
