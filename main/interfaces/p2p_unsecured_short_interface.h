@@ -72,7 +72,6 @@ public:
 
     NsP2PUnsecuredShortInterface::PacketCache cache;
 
-    // todo pass uart settings such as buffers size, active/passive mode
     // negative size to set unlimited buffers
     P2PUnsecuredShortInterface(bool is_self_rx_buf_infinite_, bool is_opponent_rx_buf_infinite_,
                                BaseSerial& read_stream_, BaseSerial& write_stream_);

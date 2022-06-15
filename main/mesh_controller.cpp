@@ -52,13 +52,6 @@ struct CompletedStreamInfo
     MeshController* controller;
 };
 
-static void handle_packet(MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
-    printf("got a finished stream from %d, %d bytes\n", src_addr, size);
-    fflush(stdout);
-    printf("%s\n", data);
-    fflush(stdout);
-}
-
 static void task_handle_packet(void* userdata) {
     auto info = (CompletedStreamInfo*) userdata;
     info->controller->user_stream_handler(info->src_addr, info->data, info->size);
@@ -388,8 +381,11 @@ static inline bool handle_data_part_packet(MeshController& controller, PacketFar
     return result;
 }
 
-// todo rewrite this function ASAP because it's broken
-static inline void retransmit_broadcast(MeshController& controller, MeshPacket* packet, uint size, uint payload_size, uint offset, far_addr_t src_addr) {
+static inline void retransmit_packet_first_broadcast(MeshController& controller, MeshPacket* packet, uint size,
+                                                     uint allocated_packet_size, far_addr_t src_addr, uint payload_size) {
+    // temporary malloced memory that is large enough to fit packet + security payload in it (if it is required)
+    MeshPacket* oversize_storage = nullptr;
+
     for (auto [peer_addr, peer] : controller.router.peers) {
         auto interface = peer.interface;
         auto mtu = controller.interfaces[interface->id].mtu;
@@ -397,23 +393,96 @@ static inline void retransmit_broadcast(MeshController& controller, MeshPacket* 
         if (controller.interfaces[interface->id].is_secured)
             mtu -= MESH_SECURE_PACKET_OVERHEAD;
 
+        // when oversize_storage becomes available, it is always used to better utilize cpu caches
+        // (`packet` may go out of cache and will not be used anymore in this function)
+        auto curr_packet_ptr = oversize_storage ? oversize_storage : packet;
+
         if (size > mtu) {
-            // fixme unaligned access to many parameters
-            controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, offset, packet->bc_data.first.payload, payload_size, true,
-                                                      packet->bc_data.first.stream_id, packet->bc_data.first.stream_size,
-                                                      packet->ttl, src_addr); // ttl already decreased
+            ushort stream_size;
+            memcpy(&stream_size, &curr_packet_ptr->bc_data.first.stream_size, sizeof(stream_size));
+            controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, 0, curr_packet_ptr->bc_data.first.payload,
+                                                      payload_size, true,
+                                                      curr_packet_ptr->bc_data.first.stream_id, stream_size,
+                                                      curr_packet_ptr->ttl, src_addr); // ttl already decreased
         }
+
         else {
             auto phy_addr = controller.interfaces[interface->id].sessions->get_phy_addr(peer_addr);
-            auto session = controller.interfaces[interface->id].sessions->get_or_none_session(phy_addr);
+
             if (controller.interfaces[interface->id].is_secured) {
-                // fixme it is not guaranteed that packet has enough size for signature
-                generate_packet_signature(&controller, session, packet, size);
+                // creating oversize_storage if required and not created earlier
+                if (size + MESH_SECURE_PACKET_OVERHEAD > allocated_packet_size && !oversize_storage) {
+                    oversize_storage = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD);
+                    memcpy(curr_packet_ptr, packet, size);
+                    curr_packet_ptr = oversize_storage;
+                }
+
+                // signing packet
+                auto session = controller.interfaces[interface->id].sessions->get_or_none_session(phy_addr);
+                generate_packet_signature(&controller, session, curr_packet_ptr, size);
                 size += MESH_SECURE_PACKET_OVERHEAD;
             }
-            interface->send_packet(phy_addr, packet, size);
+
+            // sending directly into interface
+            interface->send_packet(phy_addr, curr_packet_ptr, size);
         }
     }
+
+    if (oversize_storage)
+        free(oversize_storage); // yes, free(nullptr) is valid and compilers may emit this if, but i'd better
+                                // do it manually to make sure unnecessary function call optimized out
+}
+
+static inline void retransmit_packet_part_broadcast(MeshController& controller, MeshPacket* packet, uint size,
+                                                    uint allocated_packet_size, far_addr_t src_addr, uint payload_size) {
+    // temporary malloced memory that is large enough to fit packet + security payload in it (if it is required)
+    MeshPacket* oversize_storage = nullptr;
+
+    for (auto [peer_addr, peer] : controller.router.peers) {
+        auto interface = peer.interface;
+        auto mtu = controller.interfaces[interface->id].mtu;
+
+        if (controller.interfaces[interface->id].is_secured)
+            mtu -= MESH_SECURE_PACKET_OVERHEAD;
+
+        // when oversize_storage becomes available, it is always used to better utilize cpu caches
+        // (`packet` may go out of cache and will not be used anymore in this function)
+        auto curr_packet_ptr = oversize_storage ? oversize_storage : packet;
+
+        if (size > mtu) {
+            ushort offset;
+            memcpy(&offset, &curr_packet_ptr->bc_data.part_8.offset, sizeof(offset));
+            controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, offset, curr_packet_ptr->bc_data.first.payload,
+                                                      payload_size, true,
+                                                      curr_packet_ptr->bc_data.first.stream_id, 0,
+                                                      curr_packet_ptr->ttl, src_addr); // ttl already decreased
+        }
+
+        else {
+            auto phy_addr = controller.interfaces[interface->id].sessions->get_phy_addr(peer_addr);
+
+            if (controller.interfaces[interface->id].is_secured) {
+                // creating oversize_storage if required and not created earlier
+                if (size + MESH_SECURE_PACKET_OVERHEAD > allocated_packet_size && !oversize_storage) {
+                    oversize_storage = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD);
+                    memcpy(curr_packet_ptr, packet, size);
+                    curr_packet_ptr = oversize_storage;
+                }
+
+                // signing packet
+                auto session = controller.interfaces[interface->id].sessions->get_or_none_session(phy_addr);
+                generate_packet_signature(&controller, session, curr_packet_ptr, size);
+                size += MESH_SECURE_PACKET_OVERHEAD;
+            }
+
+            // sending directly into interface
+            interface->send_packet(phy_addr, curr_packet_ptr, size);
+        }
+    }
+
+    if (oversize_storage)
+        free(oversize_storage); // yes, free(nullptr) is valid and compilers may emit this if, but i'd better
+    // do it manually to make sure unnecessary function call optimized out
 }
 
 
@@ -542,7 +611,10 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
         if (!--packet->ttl)
             return;
 
+        ushort min_mtu;
+        memcpy(&min_mtu, &packet->far_ping.min_mtu, sizeof(min_mtu));
         if (interface_descr.mtu < packet->far_ping.min_mtu) {
+            memcpy(&packet->far_ping.min_mtu, &interface_descr.mtu, sizeof(interface_descr.mtu));
             packet->far_ping.min_mtu = interface_descr.mtu;
             packet->far_ping.router_num_with_min_mtu = packet->far_ping.routers_passed;
         }
@@ -556,9 +628,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
 
             if (interface_descr.is_secured)
                 generate_packet_signature(this, session, packet, size);
-            // fixme packet can be received by insecure interface, so it has no security payload in size
-            // malloc memory if src interface is insecure and dst is secure
-            // or better - if dst_interface.is_secure and (allocated_size < size + OVERHEAD)
+            // size is always enough because sending packet through the same interface by which the packet was received
             interface->send_packet(phy_addr, packet, size + MESH_SECURE_PACKET_OVERHEAD);
         }
         else {
@@ -570,7 +640,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
     }
 
     // retransmitting packet (some required-to-retransmit packets go further and will be retransmitted
-    // inside it's handlers (handle_data_first_packet(), handle_data_part_packet())
+    //  inside it's handlers (handle_data_first_packet(), handle_data_part_packet())
     if (dst != self_addr && dst != BROADCAST_FAR_ADDR) {
         if (!--packet->ttl)
             return;
@@ -589,6 +659,8 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
         router.add_route(src, tx_addr, packet->far_ping_response.routers_passed);
     }
 
+    // todo remove bc_data field to fix some memory access issues in the next 2 handlers
+
     if (packet->type == MeshPacketType::FAR_DATA_FIRST) {
         if (!MESH_FIELD_ACCESSIBLE(far_data.first, size))
             return;
@@ -597,7 +669,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
 
         auto payload_size = size - MESH_CALC_SIZE(far_data.first.payload);
         if (handle_data_first_packet(*this, &packet->far_data.first, payload_size, src, dst) && dst == BROADCAST_FAR_ADDR) {
-            retransmit_broadcast(*this, packet, size, payload_size, 0, src);
+            retransmit_packet_first_broadcast(*this, packet, size, allocated_packet_size, src, payload_size);
         }
         return;
     }
@@ -610,9 +682,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
 
         auto payload_size = size - MESH_CALC_SIZE(far_data.part_8.payload);
         if (handle_data_part_packet(*this, &packet->far_data.part_8, payload_size, src, dst) && dst == BROADCAST_FAR_ADDR) {
-            ushort offset;
-            memcpy(&offset, &packet->bc_data.part_8.offset, sizeof(ushort));
-            retransmit_broadcast(*this, packet, size, payload_size, offset, src);
+            retransmit_packet_part_broadcast(*this, packet, size, allocated_packet_size, src, payload_size);
         }
         return;
     }
@@ -797,7 +867,7 @@ void Router::discover_route(far_addr_t dst) {
         while (peer_list) {
             auto interface = peer_list->interface;
             auto interface_descr = controller.interfaces[interface->id];
-            far_ping->far_ping.min_mtu = interface_descr.mtu;
+            memcpy(&far_ping->far_ping.min_mtu, &interface_descr.mtu, sizeof(interface_descr.mtu));
             auto phy_addr = interface_descr.sessions->get_phy_addr(far);
 
             if (interface_descr.is_secured) {
