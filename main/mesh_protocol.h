@@ -22,6 +22,8 @@ namespace MeshProto
 
     const far_addr_t BROADCAST_FAR_ADDR = -1;
 
+    // all integers are little-endian
+
     enum class MeshPacketType : ubyte
     {
         UNKNOWN = 0,
@@ -220,14 +222,7 @@ namespace MeshProto
                     PacketFarPing far_ping;
                     PacketFarPingResponse far_ping_response;
 
-                    DataStream far_data;
-
-                    // broadcast
-                    struct {
-                        uint broadcast_id;
-
-                        DataStream bc_data;
-                    };
+                    DataStream far_data; // including broadcasts
                 };
             };
         };
