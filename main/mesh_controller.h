@@ -18,7 +18,7 @@ namespace NsMeshController
         decltype(MeshProto::PacketFarDataFirst::stream_id) stream_id;
 
     private:
-        [[maybe_unused]] ubyte _useless[0]; // to make this struct a non-standard layout and allow compiler to re-order fields
+        ubyte _useless[0]; // to make this struct a non-standard layout and allow compiler to re-order fields
     };
 
     inline bool operator==(const DataStreamIdentity& a, const DataStreamIdentity& b) {
@@ -252,7 +252,7 @@ public:
     void set_psk_password(const char* password);
 
     inline bool netname_cmp(const ubyte* name) const {
-        for (uint i = 0; i < 16; ++i) {
+        for (int i = 0; i < 16; ++i) {
             if (network_name[i] != name[i])
                 return false;
             if (name[i] == '\0')

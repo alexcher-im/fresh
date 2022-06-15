@@ -177,7 +177,7 @@ WifiEspNowMeshInterface::~WifiEspNowMeshInterface() {
 }
 
 far_addr_t WifiEspNowMeshInterface::derive_far_addr_uint32() {
-    far_addr_t addr_output;
+    far_addr_t addr_output{};
     uint hash_output;
     crc32(self_addr.raw, 6, (ubyte*) &hash_output);
     memcpy(&addr_output, &hash_output, std::min(sizeof(uint), sizeof(far_addr_t)));

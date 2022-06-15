@@ -52,12 +52,12 @@ namespace Os
     }
 
     inline void fill_random(void* buf, size_t len) {
-        for (size_t i = 0; i < len / 4; ++i) {
+        for (ssize_t i = 0; i < len / 4; ++i) {
             ((uint*) buf)[i] = random_u32();
         }
         if (len % 4) {
             auto val = random_u32();
-            for (uint i = 0; i < len % 4; ++i) {
+            for (int i = 0; i < len % 4; ++i) {
                 ((ubyte*) buf)[len / 4 * 4 + i] = val & (0xFF << i);
             }
         }
