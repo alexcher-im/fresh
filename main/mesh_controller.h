@@ -173,7 +173,7 @@ namespace NsMeshController
                 -> decltype(packet_cache.tx_cache)::iterator;
 
         // available_size must always be >= size, UB instead
-        // returns true if packet sent or cached successfully, false if it's size exceeds peers MTU
+        // returns true if packet sent or cached successfully, false if its size exceeds peers MTU
         bool send_packet(MeshProto::MeshPacket* packet, uint size, uint available_size);
 
         void discover_route(MeshProto::far_addr_t dst);
@@ -207,9 +207,7 @@ namespace NsMeshController
         bool add_data(ushort offset, const ubyte* data, ushort size);
 
         bool is_completed() const {
-            return stream_data
-                    ? (recv_parts[0][0] == 0 && recv_parts[0][1] == stream_size)
-                    : false;
+            return stream_data != nullptr && (recv_parts[0][0] == 0 && recv_parts[0][1] == stream_size);
         }
 
         bool is_expired(u64 timestamp, bool is_broadcast = false) const {
