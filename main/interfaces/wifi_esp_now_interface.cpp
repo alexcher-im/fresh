@@ -121,10 +121,10 @@ void WifiEspNowMeshInterface::check_packets() {
 }
 
 bool WifiEspNowMeshInterface::accept_near_packet(MeshPhyAddrPtr phy_addr, const MeshPacket* packet, uint size) {
-    if (packet->type == MeshPacketType::NEAR_HELLO) {
+    if (net_load(packet->type) == MeshPacketType::NEAR_HELLO) {
         return peer_manager.add_peer((ubyte*) phy_addr, 1);
     }
-    if (packet->type == MeshPacketType::NEAR_HELLO_INIT) {
+    if (net_load(packet->type) == MeshPacketType::NEAR_HELLO_INIT) {
         return peer_manager.add_peer((ubyte*) phy_addr, 1);
     }
     return true;
@@ -151,7 +151,7 @@ void WifiEspNowMeshInterface::free_near_packet(MeshPacket* packet) {
 }
 
 void WifiEspNowMeshInterface::send_packet(MeshPhyAddrPtr phy_addr, const MeshProto::MeshPacket* packet, uint size) {
-    if (packet->type == MeshPacketType::NEAR_HELLO_INIT) {
+    if (net_load(packet->type) == MeshPacketType::NEAR_HELLO_INIT) {
         size += sizeof(MacAddr);
         net_memcpy((MacAddr*) packet->near_hello_init.interface_payload, phy_addr, sizeof(MacAddr));
         phy_addr = (MeshPhyAddrPtr) BROADCAST_MAC;

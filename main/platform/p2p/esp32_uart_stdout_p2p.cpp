@@ -9,9 +9,13 @@
 #define LOCK_NAME
 #endif
 
+// on esp8266, portENTER_CRITICAL() have no arguments, but portENTER_CRITICAL(LOCK_NAME)
+// will be treated as some existing but empty arg by the compiler
+#define _invoke(macro, ...) macro(__VA_ARGS__)
+
 
 void Esp32UartSerialOut::write(const void* data, size_t size) {
-    for (size_t i = 0; i < size; ++i)
+    for (int i = 0; i < size; ++i)
         uart_tx_one_char(((const ubyte*) data)[i]);
 }
 
@@ -22,9 +26,9 @@ Esp32UartSerialOut::Esp32UartSerialOut() {
 }
 
 void Esp32UartSerialOut::start_writing() {
-    portENTER_CRITICAL(LOCK_NAME);
+    _invoke(portENTER_CRITICAL, LOCK_NAME);
 }
 
 void Esp32UartSerialOut::end_writing() {
-    portEXIT_CRITICAL(LOCK_NAME);
+    _invoke(portEXIT_CRITICAL, LOCK_NAME);
 }

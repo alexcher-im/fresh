@@ -23,8 +23,9 @@ void P2PUnsecuredShortInterface::check_packets() {
             return;
 
         ubyte read_char = tmp_char;
-        if (~read_char & 0b10000000)
+        if (~read_char & 0b10000000) {
             return; // todo write this bytes somewhere as a common stdin char/bytes
+        }
 
         remain_read = (uint) (read_char & 0b01111111);
         if (!remain_read) {
@@ -75,10 +76,10 @@ void P2PUnsecuredShortInterface::free_near_packet(MeshPacket* packet) {
 void P2PUnsecuredShortInterface::send_packet(MeshPhyAddrPtr phy_addr, const MeshPacket* packet, uint size) {
     if (!size)
         return;
-    if (is_opponent_rx_buf_infinite)
+    if (is_opponent_rx_buf_infinite || ack_received) {
         send_packet_data(packet, size);
-    else if (ack_received)
-        send_packet_data(packet, size);
+        ack_received = false;
+    }
     else
         cache.add_entry(packet, size);
 }
@@ -88,11 +89,12 @@ MeshInterfaceProps P2PUnsecuredShortInterface::get_props() {
 }
 
 void P2PUnsecuredShortInterface::send_hello(MeshPhyAddrPtr phy_addr) {
-    auto packet = (MeshPacket*) alloca(MESH_CALC_SIZE(near_hello_secure));
+    auto packet = (MeshPacket*) alloca(MESH_CALC_SIZE(near_hello_insecure));
     net_store(packet->type, MeshPacketType::NEAR_HELLO);
+    net_store(packet->near_hello_insecure.self_far_addr, controller->self_addr);
     net_memcpy(packet->near_hello_secure.network_name, controller->network_name, sizeof(controller->network_name));
 
-    send_packet(phy_addr, packet, MESH_CALC_SIZE(near_hello_secure));
+    send_packet(phy_addr, packet, MESH_CALC_SIZE(near_hello_insecure));
 }
 
 void P2PUnsecuredShortInterface::write_addr_bytes(MeshPhyAddrPtr phy_addr, void* out_buf) {
@@ -114,9 +116,9 @@ void P2PUnsecuredShortInterface::process_next_queue_element() {
             cache.last_entry = nullptr;
 
         send_packet_data(entry->data, entry->size);
+        ack_received = false;
         free(entry->data);
         free(entry);
-        ack_received = false;
     }
 }
 
@@ -130,6 +132,7 @@ void NsP2PUnsecuredShortInterface::PacketCache::add_entry(const void* data, ubyt
     auto new_entry = (CacheEntry*) malloc(sizeof(CacheEntry));
     new_entry->data = malloc(size);
     new_entry->size = size;
+    new_entry->next = nullptr;
     net_memcpy(new_entry->data, data, size);
 
     if (last_entry) {

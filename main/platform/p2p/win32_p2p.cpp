@@ -56,7 +56,7 @@ Win32Serial::Win32Serial(const char* name, uint baudrate) {
 
     timeouts.ReadIntervalTimeout = 50000;
     timeouts.ReadTotalTimeoutConstant = 50;
-    timeouts.ReadTotalTimeoutMultiplier = 1;
+    timeouts.ReadTotalTimeoutMultiplier = 0;
     timeouts.WriteTotalTimeoutConstant = 50;
     timeouts.WriteTotalTimeoutMultiplier = 1;
 
@@ -71,6 +71,10 @@ Win32Serial::Win32Serial(const char* name, uint baudrate) {
 size_t Win32Serial::read_nonblock(void* dst, size_t size) {
     DWORD n_read;
     ReadFile((HANDLE) handle, dst, size, &n_read, nullptr);
+    if (n_read) {
+        //printf("read %d bytes\n", n_read);
+        //fflush(stdout);
+    }
     return n_read;
 }
 

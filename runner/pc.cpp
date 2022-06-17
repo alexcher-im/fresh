@@ -9,13 +9,21 @@ using namespace MeshProto;
 int main() {
     auto controller = new MeshController("dev net", 7768);
     controller->set_psk_password("dev network");
-    controller->user_stream_handler = [](...) {};
+    controller->user_stream_handler = [](MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
+        printf("Hello packet!\n");
+        fflush(stdout);
+
+        // sending response. builders are used to send large amount of data using many small chunks
+        printf("%s\n", data);
+        fflush(stdout);
+    };
 
     Win32Serial serial(R"(\\.\COM6)", 115'200);
     P2PUnsecuredShortInterface uart_interface(true, false, serial, serial);
+    Os::sleep_milliseconds(1000);
     controller->add_interface(&uart_interface);
 
-    if (Os::random_u32() % 3 == 0) {
+    if (Os::random_u32() % 3) {
         printf("will send a data packet!\n");
         Os::sleep_milliseconds(5000);
         printf("sending a data packet\n");
@@ -36,6 +44,8 @@ int main() {
         MeshStreamBuilder builder(*controller, dst_addr, strlen(lorem) + 1);
         builder.write((ubyte*) lorem, strlen(lorem) + 1);
     }
+
+    Os::sleep_milliseconds(-1);
 
     return 0;
 }
