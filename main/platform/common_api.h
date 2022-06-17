@@ -34,12 +34,20 @@ namespace Os
         task.join();
     }
 
+    inline void detach_task(TaskHandle& task) {
+        task.detach();
+    }
+
     inline void sleep_ticks(uint ticks) {
         std::this_thread::sleep_for(std::chrono::milliseconds(ticks));
     }
 
     inline void sleep_milliseconds(uint milliseconds) {
         sleep_ticks(milliseconds);
+    }
+
+    inline void yield_non_starving() {
+        sleep_ticks(0);
     }
 
     inline void spinlock_microseconds(uint microseconds) {

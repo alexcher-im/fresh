@@ -51,18 +51,22 @@ struct CompletedStreamInfo
     far_addr_t src_addr;
     far_addr_t dst_addr;
     MeshController* controller;
+    Os::TaskHandle curr_task;
 };
 
 static void task_handle_packet(void* userdata) {
     auto info = (CompletedStreamInfo*) userdata;
     info->controller->user_stream_handler(info->src_addr, info->data, info->size);
+
     free(info->data);
+    Os::detach_task(info->curr_task);
+    info->~CompletedStreamInfo();
     free(info);
     Os::end_self_task();
 }
 
 
-static inline void print_bytes(ubyte* buf, uint size) {
+static inline void print_bytes(const ubyte* buf, uint size) {
     for (int i = 0; i < size; ++i) {
         printf("%02x", buf[i]);
         if (i != size - 1)
@@ -74,13 +78,14 @@ static inline void print_bytes(ubyte* buf, uint size) {
 
 static void compete_data_stream(MeshController& controller, ubyte* data, uint size, far_addr_t src_addr, far_addr_t dst_addr) {
     auto compl_info = (CompletedStreamInfo*) malloc(sizeof(CompletedStreamInfo));
+    new (compl_info) CompletedStreamInfo();
     compl_info->controller = &controller;
     compl_info->data = data;
     compl_info->size = size;
     compl_info->src_addr = src_addr;
     compl_info->dst_addr = dst_addr;
     Os::create_task(task_handle_packet, HANDLE_DATA_PACKET_NAME, HANDLE_PACKET_TASK_STACK_SIZE,
-                    compl_info, HANDLE_PACKET_TASK_PRIORITY, nullptr, HANDLE_PACKET_TASK_AFFINITY);
+                    compl_info, HANDLE_PACKET_TASK_PRIORITY, &compl_info->curr_task, HANDLE_PACKET_TASK_AFFINITY);
 }
 
 static bool check_stream_completeness(MeshController& controller, const DataStreamIdentity& identity,
@@ -88,8 +93,10 @@ static bool check_stream_completeness(MeshController& controller, const DataStre
     if (!stream.is_completed())
         return false;
 
-    compete_data_stream(controller, stream.stream_data, stream.stream_size, identity.src_addr, identity.dst_addr);
+    auto stream_data = stream.stream_data;
     stream.stream_data = nullptr;
+    // todo put a barrier (fence) here
+    compete_data_stream(controller, stream_data, stream.stream_size, identity.src_addr, identity.dst_addr);
 
     // broadcasts are never deleted immediately. at this point, .is_completed() will return if stream handler
     // should be called, but stream itself will only expire (deleted in Router::check_packet_cache())
@@ -103,8 +110,9 @@ static inline void handle_near_secure(MeshController& controller, uint interface
                                       MeshPacket* packet, uint size) {
     auto& interface_descr = controller.interfaces[interface_id];
     auto interface = interface_descr.interface;
+    auto packet_type = net_load(packet->type);
 
-    if (packet->type == MeshPacketType::NEAR_HELLO) {
+    if (packet_type == MeshPacketType::NEAR_HELLO) {
         if (!MESH_FIELD_ACCESSIBLE(near_hello_secure, size))
             return;
         if (!controller.netname_cmp(packet->near_hello_secure.network_name))
@@ -134,7 +142,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         printf("time after hello handler: %llu\n", Os::get_microseconds());
     }
 
-    else if (packet->type == MeshPacketType::NEAR_HELLO_INIT) {
+    else if (packet_type == MeshPacketType::NEAR_HELLO_INIT) {
         if (!MESH_FIELD_ACCESSIBLE(near_hello_init, size))
             return;
 
@@ -174,7 +182,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         printf("time after init handler: %llu\n", Os::get_microseconds());
     }
 
-    else if (packet->type == MeshPacketType::HEAR_HELLO_AUTHORIZE) {
+    else if (packet_type == MeshPacketType::HEAR_HELLO_AUTHORIZE) {
         if (!MESH_FIELD_ACCESSIBLE(near_hello_authorize, size))
             return;
 
@@ -232,7 +240,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         controller.router.add_peer(session->secure.peer_far_addr, interface);
     }
 
-    else if (packet->type == MeshPacketType::NEAR_HELLO_JOINED) {
+    else if (packet_type == MeshPacketType::NEAR_HELLO_JOINED) {
         if (!MESH_FIELD_ACCESSIBLE(near_hello_joined_secure, size))
             return;
 
@@ -275,26 +283,42 @@ static inline void handle_near_insecure(MeshController& controller, uint interfa
                                         MeshPacket* packet, uint size) {
     auto& interface_descr = controller.interfaces[interface_id];
     auto interface = interface_descr.interface;
+    auto packet_type = net_load(packet->type);
 
-    if (packet->type == MeshPacketType::NEAR_HELLO) {
+    if (packet_type == MeshPacketType::NEAR_HELLO) {
+        if (!MESH_FIELD_ACCESSIBLE(near_hello_insecure, size))
+            return;
+        if (!controller.netname_cmp(packet->near_hello_insecure.network_name))
+            return;
+
         auto session = interface_descr.sessions->get_or_create_session(phy_addr);
         session->insecure.peer_far_addr = net_load(packet->near_hello_insecure.self_far_addr);
 
         if (!interface->accept_near_packet(phy_addr, packet, size)) {
             return;
         }
-        // todo add a peer in controller.router
 
         auto packet_size = MESH_CALC_SIZE(near_hello_joined_insecure);
         auto joined_packet = interface->alloc_near_packet(MeshPacketType::NEAR_HELLO_JOINED, packet_size);
         net_store(joined_packet->near_hello_joined_insecure.self_far_addr, controller.self_addr);
         interface->send_packet(phy_addr, joined_packet, packet_size);
         interface->free_near_packet(joined_packet);
+
+        controller.router.add_peer(session->insecure.peer_far_addr, interface);
+        printf("got insecure near hello (opponent addr: %d)\n", session->insecure.peer_far_addr);
+        fflush(stdout);
     }
 
-    else if (packet->type == MeshPacketType::NEAR_HELLO_JOINED) {
+    else if (packet_type == MeshPacketType::NEAR_HELLO_JOINED) {
+        if (!MESH_FIELD_ACCESSIBLE(near_hello_joined_insecure, size))
+            return;
+
         auto session = interface_descr.sessions->get_or_create_session(phy_addr);
         session->insecure.peer_far_addr = net_load(packet->near_hello_joined_insecure.self_far_addr);
+        controller.router.add_peer(session->insecure.peer_far_addr, interface);
+
+        printf("got insecure near joined (opponent addr: %d)\n", session->insecure.peer_far_addr);
+        fflush(stdout);
     }
 }
 
@@ -508,6 +532,10 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
         printf("got a packet from (" MACSTR "): type=%d, size=%d\n", MAC2STR((ubyte*) phy_addr), (int) packet->type, size);
         fflush(stdout);
     }
+    else {
+        printf("got a packet from unknown address: type=%d, size=%d\n", (int) packet->type, size);
+        fflush(stdout);
+    }
     // todo handle non-secured interfaces as well
     // todo add encryption for data streams
     auto& interface_descr = interfaces[interface_id];
@@ -575,6 +603,8 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
         if (!session)
             return;
         tx_addr = session->insecure.peer_far_addr;
+        printf("packet hash not required\n");
+        fflush(stdout);
     }
 
     // check optimized far data packets
@@ -692,7 +722,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
         }
         self->check_data_streams();
         self->router.check_packet_cache();
-        Os::sleep_ticks(1);
+        Os::yield_non_starving();
     }
 }
 
@@ -708,7 +738,8 @@ void MeshController::remove_interface(MeshInterface* interface) {
     interface->controller = nullptr;
     auto last_elem = interfaces[interfaces.size() - 1];
     last_elem.interface->id = interface->id;
-    interfaces[interface->id] = last_elem;
+    if (interface != last_elem.interface) // to prevent from being moved to itself
+        interfaces[interface->id] = last_elem;
     interfaces.pop_back();
 }
 
@@ -1248,8 +1279,10 @@ bool NsMeshController::DataStream::remake_parts(ushort start, ushort end) {
     uint new_collection_fill_level = 0;
 
     for (int i = 0; i < DATA_STREAM_RECV_PAIR_CNT; ++i) {
-        if (recv_parts[i][0] == recv_parts[i][1])
-            break;
+        if (recv_parts[i][0] == recv_parts[i][1]) {
+            new_collection[i][0] = new_collection[i][1] = 0;
+            continue;
+        }
 
         // setting lower boundary of new segment
         if (recv_parts[i][0] <= start && start <= recv_parts[i][1]) {

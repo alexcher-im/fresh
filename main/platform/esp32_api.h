@@ -33,12 +33,20 @@ namespace Os
         vTaskDelete(task);
     }
 
+    inline void detach_task(TaskHandle& task) {
+        //
+    }
+
     inline void sleep_ticks(uint ticks) {
         vTaskDelay(ticks);
     }
 
     inline void sleep_milliseconds(uint milliseconds) {
         sleep_ticks(milliseconds / portTICK_PERIOD_MS);
+    }
+
+    inline void yield_non_starving() {
+        sleep_ticks(1);
     }
 
     inline void spinlock_microseconds(uint microseconds) {
