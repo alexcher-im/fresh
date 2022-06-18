@@ -1,22 +1,23 @@
 # Fresh
 
-A cross-interface mesh network for ESP32 microcontrollers.
+A cross-interface & cross-platform mesh network with support of microcontrollers.
+Primarily, intended to work in small networks (not larger than about 100-200 devices).
 
-Currently, in a very raw state, barely supports:
+Currently, supports:
 * Broadcasts
 * Unicasts
 * Route discovery
 * Stream fragmentation/defragmentation
 * Packet retransmission
 * Multi-MTU support (reshaping transit streams to lower-mtu interfaces, but not in reverse)
+* Insecure interfaces
+* Combination of both secure and insecure interfaces on the same device
+* Cross-platforming
 
 Needs to be done:
-* Insecure interface support
-* Combination of both secure and insecure interfaces on the same device
 * Removing devices and fixing routes
 * Encryption (only authentication is implemented now)
 * Proper synchronization to prevent data races
-* Cross-platform support
 
 Task tracking is done via `todo`/`fixme` comments in the code.
 
