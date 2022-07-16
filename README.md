@@ -62,3 +62,7 @@ void app_main() {
 }
 
 ```
+
+
+## Pc (Win32, Linux, etc...)
+You need to install `pkg-config` in your build system to find dependencies such as libsodium.
