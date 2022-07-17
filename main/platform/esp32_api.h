@@ -4,12 +4,14 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <mbedtls/md.h>
+#include <sha256_alt.h>
+#include <mbedtls/sha256.h>
 
 
 namespace Os
 {
     typedef xTaskHandle TaskHandle;
-    typedef mbedtls_md_context_t Sha256Handle;
+    typedef mbedtls_sha256_context Sha256Handle;
 
     inline u64 get_microseconds() {
         return esp_timer_get_time();
@@ -63,20 +65,18 @@ namespace Os
 
     // crypto
     inline Sha256Handle create_sha256() {
-        mbedtls_md_context_t ctx;
-        mbedtls_md_init(&ctx);
-        mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_MD5), 0);
-        mbedtls_md_starts(&ctx);
+        mbedtls_sha256_context ctx;
+        ctx.mode = ESP_MBEDTLS_SHA256_UNUSED;
+        mbedtls_sha256_starts_ret(&ctx, 0);
         return ctx;
     }
 
     inline void update_sha256(Sha256Handle* ctx, const void* buf, uint size) {
-        mbedtls_md_update(ctx, (const ubyte*) buf, size);
+        mbedtls_sha256_update_ret(ctx, (const ubyte*) buf, size);
     }
 
     inline void finish_sha256(Sha256Handle* ctx, void* hash_write) {
-        mbedtls_md_finish(ctx, (ubyte*) hash_write);
-        mbedtls_md_free(ctx);
+        mbedtls_sha256_finish_ret(ctx, (ubyte*) hash_write);
     }
 
     inline void sha256(const ubyte* buf, size_t size, ubyte out[32]) {
