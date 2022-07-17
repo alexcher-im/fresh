@@ -26,12 +26,19 @@ For more details about the protocol, check [mesh_protocol.h](main/mesh_protocol.
 
 ## Usage (C++)
 
-### Including (as library)
+### Including (as ESP-IDF component)
 Clone a repo to your project's component directory and add `fresh` to 
 `REQUIRES` or `PRIV_REQUIRES` in `idf_component_register()`.
 
 For more information about ESP-IDF components, check 
 [ESP-IDF Build System](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/build-system.html).
+
+### Including (as Cmake target)
+Clone a repo, add to your CMakeLists.txt:
+```cmake
+add_subdirectory(path/to/fresh)
+target_link_libraries(your_target PRIVATE ${FRESH_PROJECT_NAME})
+```
 
 ### Code
 ```c++
@@ -62,6 +69,12 @@ void app_main() {
 }
 
 ```
+
+
+### Disabling build paths
+You can define CMake variables to skip some build paths:
+* `FRESH_BUILD_SKIP_ESPIDF_COMPONENT` - skip trying to initialize as ESP-IDF component
+* `FRESH_BUILD_SKIP_ESPIDF_STANDALONE` - skip trying to initialize as standalone ESP-IDF project
 
 
 ## Pc (Win32, Linux, etc...)
