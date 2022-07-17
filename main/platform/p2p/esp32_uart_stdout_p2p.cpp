@@ -21,7 +21,7 @@ void Esp32UartSerialOut::write(const void* data, size_t size) {
 
 Esp32UartSerialOut::Esp32UartSerialOut() {
     #ifdef CONFIG_IDF_TARGET_ESP32
-    vPortCPUInitializeMutex(LOCK_NAME);
+    spinlock_initialize(LOCK_NAME);
     #endif
 }
 
