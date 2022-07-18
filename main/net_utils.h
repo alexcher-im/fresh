@@ -42,6 +42,7 @@ constexpr T num_to_le_num(T val) {
 }
 
 
+// call this to read data from network packet
 template <typename T>
 inline T net_load(const T& ptr) {
     T out;
@@ -53,6 +54,7 @@ inline T net_load(const T& ptr) {
     return out;
 }
 
+// call this to put data into the network packet
 template <typename T>
 inline void net_store(T& ptr, T value) {
     if constexpr (std::is_integral<T>::value)
@@ -82,11 +84,7 @@ inline T net_pre_increment(T& ptr) {
 }
 
 
-template <typename T>
-inline void net_loadstore_nonscalar(T& ptr, T value) {
-    net_store(ptr, value);
-}
-
+// call this to load from/store to network packet if data can be a C-array (so can't be returned from net_load() function)
 template <typename T, int arr_size>
 inline void net_loadstore_nonscalar(T (&dst_arr)[arr_size], const T (&src_arr)[arr_size]) {
     net_memcpy(*&dst_arr, *&src_arr, sizeof(T) * arr_size);
