@@ -39,7 +39,7 @@ static bool generate_packet_signature(const MeshController* controller, const Pe
         memset((ubyte*) &sign->hash + sizeof(correct_signature), 0, sizeof(correct_signature) - sizeof(hashdigest_t));
 
     net_memcpy(&sign->hash, correct_signature, std::min(sizeof(correct_signature), sizeof(hashdigest_t)));
-    net_loadstore_nonscalar(sign->timestamp, timestamp);
+    net_store(sign->timestamp, timestamp);
     return true;
 }
 
