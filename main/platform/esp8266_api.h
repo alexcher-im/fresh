@@ -5,6 +5,7 @@
 #include <freertos/task.h>
 #include <mbedtls/md.h>
 
+#include <esp_timer.h>
 
 namespace Os
 {
