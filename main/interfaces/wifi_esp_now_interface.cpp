@@ -8,6 +8,10 @@
 #include "../hashes.h"
 #include "net_utils.h"
 
+#include "sdkconfig.h"
+#ifdef CONFIG_IDF_TARGET_ESP8266
+#include <esp_netif.h>
+#endif
 
 using namespace NsWifiEspNowInterface;
 using namespace MeshProto;
