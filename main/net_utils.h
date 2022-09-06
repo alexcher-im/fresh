@@ -1,7 +1,10 @@
 #pragma once
 
 
+// GCC in ESP-IDF v4.x didn't require this header for std::endian
+#if __cplusplus > 201709L
 #include <bit>
+#endif
 
 inline void net_memcpy(void* dst, const void* src, size_t size) {
     memcpy(dst, src, size);
@@ -41,7 +44,6 @@ constexpr T num_to_le_num(T val) {
         return val;
     else
         return swap_integral_bytes(val);
-    return {}; // to silence weird gcc warning
 }
 
 

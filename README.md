@@ -14,6 +14,7 @@ Currently, supports:
 * Combination of both secure and insecure interfaces on the same device
 * Cross-platforming
 * Packet duplicate avoidance
+* Support for ESP-IDF v4.x and v5.0
 
 Needs to be done:
 * Removing devices and fixing routes
