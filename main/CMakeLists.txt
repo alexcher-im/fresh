@@ -22,7 +22,7 @@ if (DEFINED ESP_PLATFORM)
     idf_component_register(
             SRCS ${FRESH_SRCS}
             INCLUDE_DIRS ${FRESH_SOURCE_DIR} ${FRESH_SOURCE_DIR}/interfaces
-            REQUIRES nvs_flash mbedtls libsodium
+            REQUIRES nvs_flash mbedtls esp_netif esp_event esp_wifi esp_timer
     )
 
     set(FRESH_PROJECT_NAME ${COMPONENT_LIB})

@@ -3,6 +3,8 @@
 #include "wifi_esp_now_interface.h"
 #include <esp_wifi.h>
 #include <esp_now.h>
+#include <esp_wifi_types.h>
+#include <esp_netif.h>
 #include <cstring>
 #include <nvs_flash.h>
 #include "../hashes.h"
@@ -18,7 +20,7 @@ using namespace MeshProto;
 
 
 DRAM_ATTR static const ubyte BROADCAST_MAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-static xQueueHandle global_rx_queue_handle = 0;
+static QueueHandle_t global_rx_queue_handle = 0;
 
 
 struct RequestQueueData

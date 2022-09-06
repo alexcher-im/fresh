@@ -6,11 +6,14 @@
 #include <mbedtls/md.h>
 #include <sha256_alt.h>
 #include <mbedtls/sha256.h>
+#include <rom/ets_sys.h>
+#include <esp_random.h>
+#include <esp_timer.h>
 
 
 namespace Os
 {
-    typedef xTaskHandle TaskHandle;
+    typedef TaskHandle_t TaskHandle;
     typedef mbedtls_sha256_context Sha256Handle;
 
     inline u64 get_microseconds() {
@@ -67,16 +70,16 @@ namespace Os
     inline Sha256Handle create_sha256() {
         mbedtls_sha256_context ctx;
         ctx.mode = ESP_MBEDTLS_SHA256_UNUSED;
-        mbedtls_sha256_starts_ret(&ctx, 0);
+        mbedtls_sha256_starts(&ctx, 0);
         return ctx;
     }
 
     inline void update_sha256(Sha256Handle* ctx, const void* buf, uint size) {
-        mbedtls_sha256_update_ret(ctx, (const ubyte*) buf, size);
+        mbedtls_sha256_update(ctx, (const ubyte*) buf, size);
     }
 
     inline void finish_sha256(Sha256Handle* ctx, void* hash_write) {
-        mbedtls_sha256_finish_ret(ctx, (ubyte*) hash_write);
+        mbedtls_sha256_finish(ctx, (ubyte*) hash_write);
     }
 
     inline void sha256(const ubyte* buf, size_t size, ubyte out[32]) {

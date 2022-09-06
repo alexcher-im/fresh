@@ -3,7 +3,6 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
-#include <esp_wifi_types.h>
 #include <cstring>
 #include <unordered_map>
 #include "../mesh_base_interface.h"
@@ -56,7 +55,7 @@ public:
 
     NsWifiEspNowInterface::EspNowPeerManager peer_manager;
     NsWifiEspNowInterface::SessionManager session_manager;
-    xQueueHandle rx_queue{};
+    QueueHandle_t rx_queue{};
     NsWifiEspNowInterface::MacAddr self_addr;
 
     WifiEspNowMeshInterface();

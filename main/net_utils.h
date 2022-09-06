@@ -41,6 +41,7 @@ constexpr T num_to_le_num(T val) {
         return val;
     else
         return swap_integral_bytes(val);
+    return {}; // to silence weird gcc warning
 }
 
 

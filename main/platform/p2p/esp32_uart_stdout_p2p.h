@@ -22,4 +22,6 @@ public:
     void start_writing() override;
 
     void end_writing() override;
+
+    ~Esp32UartSerialOut() override;
 };
