@@ -7,6 +7,15 @@
 #include "../types.h"
 
 
+#if __x86_64__
+#include <immintrin.h>
+//#define YIELD_CPU __asm__ __volatile__("pause")
+#define YIELD_CPU _mm_pause()
+#else
+#define YIELD_CPU std::this_thread::yield()
+#endif
+
+
 namespace Os
 {
     typedef std::thread TaskHandle;
@@ -52,7 +61,8 @@ namespace Os
 
     inline void spinlock_microseconds(uint microseconds) {
         auto end = get_microseconds() + microseconds;
-        while (get_microseconds() < end) ;
+        while (get_microseconds() < end)
+            YIELD_CPU;
     }
 
     inline uint random_u32() {

@@ -1,6 +1,8 @@
 #pragma once
 
 
+#include <bit>
+
 inline void net_memcpy(void* dst, const void* src, size_t size) {
     memcpy(dst, src, size);
 }

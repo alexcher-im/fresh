@@ -138,7 +138,7 @@ namespace NsMeshController
         u64 last_modif_timestamp;
         CachedRxDataStreamPart part;
 
-        bool is_expired(u64 new_time) {
+        bool is_expired(u64 new_time) const {
             return new_time > last_modif_timestamp + MAX_RX_CACHE_ENTRY_LIVE_TIME;
         }
     };

@@ -13,6 +13,7 @@ Currently, supports:
 * Insecure interfaces
 * Combination of both secure and insecure interfaces on the same device
 * Cross-platforming
+* Packet duplicate avoidance
 
 Needs to be done:
 * Removing devices and fixing routes

@@ -6,6 +6,8 @@
 using namespace MeshProto;
 using namespace NsMeshController;
 
+// todo add sniffing api
+
 
 #pragma pack(push, 1)
 struct MessageHashConcatParams
@@ -95,7 +97,6 @@ static bool check_stream_completeness(MeshController& controller, const DataStre
 
     auto stream_data = stream.stream_data;
     stream.stream_data = nullptr;
-    // todo put a barrier (fence) here
     compete_data_stream(controller, stream_data, stream.stream_size, identity.src_addr, identity.dst_addr);
 
     // broadcasts are never deleted immediately. at this point, .is_completed() will return if stream handler
@@ -635,7 +636,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
     if (src == self_addr)
         return;
 
-    if (packet->type == MeshPacketType::FAR_PING) {
+    if (packet_type == MeshPacketType::FAR_PING) {
         if (!MESH_FIELD_ACCESSIBLE(far_ping, size))
             return;
         if (!net_pre_decrement(packet->ttl))
@@ -677,7 +678,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
             return;
     }
 
-    if (packet->type == MeshPacketType::FAR_PING_RESPONSE) {
+    if (packet_type == MeshPacketType::FAR_PING_RESPONSE) {
         if (!MESH_FIELD_ACCESSIBLE(far_ping_response, size))
             return;
         if (!net_pre_decrement(packet->ttl))
@@ -686,7 +687,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
         router.add_route(src, tx_addr, packet->far_ping_response.routers_passed);
     }
 
-    if (packet->type == MeshPacketType::FAR_DATA_FIRST) {
+    if (packet_type == MeshPacketType::FAR_DATA_FIRST) {
         if (!MESH_FIELD_ACCESSIBLE(far_data.first, size))
             return;
         if (!net_pre_decrement(packet->ttl))
@@ -699,7 +700,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
         return;
     }
 
-    if (packet->type == MeshPacketType::FAR_DATA_PART) {
+    if (packet_type == MeshPacketType::FAR_DATA_PART) {
         if (!MESH_FIELD_ACCESSIBLE(far_data.part_8, size))
             return;
         if (!net_pre_decrement(packet->ttl))
