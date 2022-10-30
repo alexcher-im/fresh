@@ -14,11 +14,11 @@ Currently, supports:
 * Combination of both secure and insecure interfaces on the same device
 * Cross-platforming
 * Packet duplicate avoidance
-* Support for ESP-IDF v4.x and v5.0
+* Support for ESP-IDF v4.2+ and v5.0
 
 Needs to be done:
 * Removing devices and fixing routes
-* Encryption (only authentication is implemented now)
+* Encryption (only authentication and integrity checking is implemented now)
 * Proper synchronization to prevent data races
 
 Task tracking is done via `todo`/`fixme` comments in the code.

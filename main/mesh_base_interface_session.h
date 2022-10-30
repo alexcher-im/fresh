@@ -125,7 +125,7 @@ public:
 
     void check_caches(u64 time) override {
         for (auto it = est_sessions.begin(); it != est_sessions.end();) {
-            auto& [phy_addr, est_session] = *it;
+            auto&est_session = it->second;
 
             if (est_session.is_expired(time))
                 it = est_sessions.erase(it);

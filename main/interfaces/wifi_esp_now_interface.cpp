@@ -32,7 +32,7 @@ struct RequestQueueData
 
 
 static void recv_callback(const ubyte* mac, const ubyte* data, int data_size) {
-    if (mac == NULL || data == NULL || data_size < 0) {
+    if (mac == nullptr || data == nullptr || data_size < 0) {
         printf("esp-now: data error in recv callback\n");
         return;
     }
@@ -89,7 +89,7 @@ WifiEspNowMeshInterface::WifiEspNowMeshInterface() {
     ESP_ERROR_CHECK(esp_now_register_send_cb(send_callback));
     ESP_ERROR_CHECK(esp_now_register_recv_cb(recv_callback));
 
-    // setting self mac
+    // set self mac
     esp_wifi_get_mac(WIFI_IF_STA, self_addr.raw);
 
     peer_manager.add_peer(BROADCAST_MAC, 0);

@@ -138,6 +138,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         auto init_packet = interface->alloc_near_packet(MeshPacketType::NEAR_HELLO_INIT, packet_size);
         net_loadstore_nonscalar(init_packet->near_hello_init.member_nonce, est_session->peer_nonce);
 
+        // sending
         interface->send_packet(phy_addr, init_packet, packet_size);
         interface->free_near_packet(init_packet);
         printf("time after hello handler: %llu\n", Os::get_microseconds());
@@ -158,6 +159,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         }
         // setting est session
         est_session->stage = PeerSecureSessionEstablishmentStage::WAITING_FOR_HELLO_JOINED;
+        est_session->time_start = Os::get_microseconds();
         Os::fill_random(&est_session->session_info.session_key, sizeof(session_key_t));
 
         // generating response packet
@@ -177,7 +179,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
 
         net_memcpy(&auth_packet->near_hello_authorize.hash, hash_digest, sizeof(hashdigest_t));
 
-        // send
+        // sending
         interface->send_packet(phy_addr, auth_packet, packet_size);
         interface->free_near_packet(auth_packet);
         printf("time after init handler: %llu\n", Os::get_microseconds());
@@ -187,7 +189,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         if (!MESH_FIELD_ACCESSIBLE(near_hello_authorize, size))
             return;
 
-        // checks
+        // checking if we were waiting for this packet (from this address and with this type)
         auto est_session = interface_descr.sessions->get_or_none_est_session(phy_addr);
         if (est_session == nullptr || est_session->stage != PeerSecureSessionEstablishmentStage::WAITING_FOR_HELLO_AUTH)
             return;
@@ -228,7 +230,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
 
         net_memcpy(&joined_packet->near_hello_joined_secure.hash, hash_digest, sizeof(hashdigest_t));
 
-        // send
+        // sending
         interface->send_packet(phy_addr, joined_packet, packet_size);
         interface->free_near_packet(joined_packet);
 
@@ -245,7 +247,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         if (!MESH_FIELD_ACCESSIBLE(near_hello_joined_secure, size))
             return;
 
-        // checks
+        // checking if we were waiting for this packet (from this address and with this type)
         auto est_session = interface_descr.sessions->get_or_none_est_session(phy_addr);
         if (est_session == nullptr || est_session->stage != PeerSecureSessionEstablishmentStage::WAITING_FOR_HELLO_JOINED)
             return;
