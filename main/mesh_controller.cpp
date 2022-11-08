@@ -410,12 +410,13 @@ static inline bool handle_data_part_packet(MeshController& controller, PacketFar
     return result;
 }
 
-static inline void retransmit_packet_first_broadcast(MeshController& controller, MeshPacket* packet, uint size,
+static inline void retransmit_packet_first_broadcast(MeshController& controller, MeshPacket* packet, uint packet_size,
                                                      uint allocated_packet_size, far_addr_t src_addr, uint payload_size) {
     // temporary malloced memory that is large enough to fit packet + security payload in it (if it is required)
     MeshPacket* oversize_storage = nullptr;
 
     for (auto [peer_addr, peer] : controller.router.peers) {
+        auto send_size = packet_size;
         auto interface = peer.interface;
         auto mtu = controller.interfaces[interface->id].mtu;
 
@@ -426,7 +427,7 @@ static inline void retransmit_packet_first_broadcast(MeshController& controller,
         // (`packet` may go out of cache and will not be used anymore in this function)
         auto curr_packet_ptr = oversize_storage ? oversize_storage : packet;
 
-        if (size > mtu) {
+        if (send_size > mtu) {
             controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, 0, curr_packet_ptr->far_data.first.payload,
                                                       payload_size, true,
                                                       net_load(curr_packet_ptr->far_data.first.stream_id),
@@ -439,20 +440,20 @@ static inline void retransmit_packet_first_broadcast(MeshController& controller,
 
             if (controller.interfaces[interface->id].is_secured) {
                 // creating oversize_storage if required and not created earlier
-                if (size + MESH_SECURE_PACKET_OVERHEAD > allocated_packet_size && !oversize_storage) {
-                    oversize_storage = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD);
-                    net_memcpy(curr_packet_ptr, packet, size);
+                if (send_size + MESH_SECURE_PACKET_OVERHEAD > allocated_packet_size && !oversize_storage) {
+                    oversize_storage = (MeshPacket*) malloc(send_size + MESH_SECURE_PACKET_OVERHEAD);
+                    net_memcpy(curr_packet_ptr, packet, send_size);
                     curr_packet_ptr = oversize_storage;
                 }
 
                 // signing packet
                 auto session = controller.interfaces[interface->id].sessions->get_or_none_session(phy_addr);
-                generate_packet_signature(&controller, session, curr_packet_ptr, size);
-                size += MESH_SECURE_PACKET_OVERHEAD;
+                generate_packet_signature(&controller, session, curr_packet_ptr, send_size);
+                send_size += MESH_SECURE_PACKET_OVERHEAD;
             }
 
             // sending directly into interface
-            interface->send_packet(phy_addr, curr_packet_ptr, size);
+            interface->send_packet(phy_addr, curr_packet_ptr, send_size);
         }
     }
 
@@ -461,12 +462,13 @@ static inline void retransmit_packet_first_broadcast(MeshController& controller,
                                 // do it manually to make sure unnecessary function call optimized out
 }
 
-static inline void retransmit_packet_part_broadcast(MeshController& controller, MeshPacket* packet, uint size,
+static inline void retransmit_packet_part_broadcast(MeshController& controller, MeshPacket* packet, uint packet_size,
                                                     uint allocated_packet_size, far_addr_t src_addr, uint payload_size) {
     // temporary malloced memory that is large enough to fit packet + security payload in it (if it is required)
     MeshPacket* oversize_storage = nullptr;
 
     for (auto [peer_addr, peer] : controller.router.peers) {
+        auto send_size = packet_size;
         auto interface = peer.interface;
         auto mtu = controller.interfaces[interface->id].mtu;
 
@@ -477,7 +479,7 @@ static inline void retransmit_packet_part_broadcast(MeshController& controller, 
         // (`packet` may go out of cache and will not be used anymore in this function)
         auto curr_packet_ptr = oversize_storage ? oversize_storage : packet;
 
-        if (size > mtu) {
+        if (send_size > mtu) {
             controller.router.write_data_stream_bytes(BROADCAST_FAR_ADDR, net_load(curr_packet_ptr->far_data.part_8.offset),
                                                       curr_packet_ptr->far_data.first.payload,
                                                       payload_size, true,
@@ -490,20 +492,20 @@ static inline void retransmit_packet_part_broadcast(MeshController& controller, 
 
             if (controller.interfaces[interface->id].is_secured) {
                 // creating oversize_storage if required and not created earlier
-                if (size + MESH_SECURE_PACKET_OVERHEAD > allocated_packet_size && !oversize_storage) {
-                    oversize_storage = (MeshPacket*) malloc(size + MESH_SECURE_PACKET_OVERHEAD);
-                    net_memcpy(curr_packet_ptr, packet, size);
+                if (send_size + MESH_SECURE_PACKET_OVERHEAD > allocated_packet_size && !oversize_storage) {
+                    oversize_storage = (MeshPacket*) malloc(send_size + MESH_SECURE_PACKET_OVERHEAD);
+                    net_memcpy(curr_packet_ptr, packet, send_size);
                     curr_packet_ptr = oversize_storage;
                 }
 
                 // signing packet
                 auto session = controller.interfaces[interface->id].sessions->get_or_none_session(phy_addr);
-                generate_packet_signature(&controller, session, curr_packet_ptr, size);
-                size += MESH_SECURE_PACKET_OVERHEAD;
+                generate_packet_signature(&controller, session, curr_packet_ptr, send_size);
+                send_size += MESH_SECURE_PACKET_OVERHEAD;
             }
 
             // sending directly into interface
-            interface->send_packet(phy_addr, curr_packet_ptr, size);
+            interface->send_packet(phy_addr, curr_packet_ptr, send_size);
         }
     }
 
@@ -656,13 +658,15 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
             net_store(packet->dst_addr, packet->src_addr);
             net_store(packet->src_addr, self_addr);
 
-            if (interface_descr.is_secured)
+            if (interface_descr.is_secured) {
+                size += MESH_SECURE_PACKET_OVERHEAD;
                 generate_packet_signature(this, session, packet, size);
+            }
             // size is always enough because sending packet through the same interface by which the packet was received
-            interface->send_packet(phy_addr, packet, size + MESH_SECURE_PACKET_OVERHEAD);
+            interface->send_packet(phy_addr, packet, size);
         }
         else {
-            //
+            router.send_packet(packet, size, allocated_packet_size);
         }
 
         router.add_route(src, tx_addr, net_load(packet->far_ping.routers_passed));
