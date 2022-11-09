@@ -11,6 +11,8 @@
 #include "net_utils.h"
 
 #include "sdkconfig.h"
+#include "log_utils.h"
+
 #ifdef CONFIG_IDF_TARGET_ESP8266
 #include <esp_netif.h>
 #endif
@@ -101,7 +103,6 @@ void WifiEspNowMeshInterface::check_packets() {
     RequestQueueData data;
 
     while (xQueueReceive(rx_queue, &data, 0) == pdTRUE) {
-        printf("queue received a packet\n");
         auto packet = data.payload;
 
         if (self_addr == data.mac)
@@ -109,13 +110,15 @@ void WifiEspNowMeshInterface::check_packets() {
 
         if (net_load(packet->type) == MeshPacketType::NEAR_HELLO_INIT) {
             // packet size check
-            printf("packet size check: got %d\n", data.size);
-            if ((ubyte*) ((MacAddr*) packet->near_hello_init.interface_payload + 1) - (ubyte*) packet > data.size)
+            if ((ubyte*) ((MacAddr*) packet->near_hello_init.interface_payload + 1) - (ubyte*) packet > data.size) {
+                write_log(controller->self_addr, LogFeatures::TRACE_PACKET_IO, "WifiEspNowMeshInterface: "
+                          "discarding NEAR_HELLO_INIT packet before passing to controller because of invalid size");
                 goto packet_end;
+            }
 
-            printf("packet addr check\n");
-            if (net_load(*(MacAddr*)packet->near_hello_init.interface_payload) != self_addr)
+            if (net_load(*(MacAddr*)packet->near_hello_init.interface_payload) != self_addr) {
                 goto packet_end;
+            }
             data.size -= sizeof(MacAddr);
         }
 
@@ -161,10 +164,6 @@ void WifiEspNowMeshInterface::send_packet(MeshPhyAddrPtr phy_addr, const MeshPro
         size += sizeof(MacAddr);
         net_memcpy((MacAddr*) packet->near_hello_init.interface_payload, phy_addr, sizeof(MacAddr));
         phy_addr = (MeshPhyAddrPtr) BROADCAST_MAC;
-        printf("hello init broadcast sent (size=%d)\n", size);
-    }
-    else {
-        printf("unicast sent (type=%d, size=%d)\n", (int) packet->type, size);
     }
 
     // todo make a while-loop for sending and waiting

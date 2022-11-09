@@ -46,6 +46,7 @@ namespace NsMeshController
         MeshInterface* interface;
         MeshInterfaceSessionManager* sessions;
         uint mtu;
+        ubyte address_size; // in bytes
         bool is_secured;
     };
 

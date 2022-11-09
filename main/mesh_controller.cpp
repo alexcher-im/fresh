@@ -140,6 +140,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         net_loadstore_nonscalar(init_packet->near_hello_init.member_nonce, est_session->peer_nonce);
 
         // sending
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending secure NEAR_HELLO_INIT");
         interface->send_packet(phy_addr, init_packet, packet_size);
         interface->free_near_packet(init_packet);
         printf("time after hello handler: %llu\n", Os::get_microseconds());
@@ -181,6 +182,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         net_memcpy(&auth_packet->near_hello_authorize.hash, hash_digest, sizeof(hashdigest_t));
 
         // sending
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending secure HEAR_HELLO_AUTHORIZE");
         interface->send_packet(phy_addr, auth_packet, packet_size);
         interface->free_near_packet(auth_packet);
         printf("time after init handler: %llu\n", Os::get_microseconds());
@@ -232,6 +234,7 @@ static inline void handle_near_secure(MeshController& controller, uint interface
         net_memcpy(&joined_packet->near_hello_joined_secure.hash, hash_digest, sizeof(hashdigest_t));
 
         // sending
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending secure NEAR_HELLO_JOINED");
         interface->send_packet(phy_addr, joined_packet, packet_size);
         interface->free_near_packet(joined_packet);
 
@@ -305,6 +308,7 @@ static inline void handle_near_insecure(MeshController& controller, uint interfa
         auto packet_size = MESH_CALC_SIZE(near_hello_joined_insecure);
         auto joined_packet = interface->alloc_near_packet(MeshPacketType::NEAR_HELLO_JOINED, packet_size);
         net_store(joined_packet->near_hello_joined_insecure.self_far_addr, controller.self_addr);
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending insecure NEAR_HELLO_JOINED");
         interface->send_packet(phy_addr, joined_packet, packet_size);
         interface->free_near_packet(joined_packet);
 
@@ -454,6 +458,7 @@ static inline void retransmit_packet_first_broadcast(MeshController& controller,
             }
 
             // sending directly into interface
+            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: retransmitting broadcast to far(%d)", peer_addr);
             interface->send_packet(phy_addr, curr_packet_ptr, send_size);
         }
     }
@@ -506,6 +511,7 @@ static inline void retransmit_packet_part_broadcast(MeshController& controller, 
             }
 
             // sending directly into interface
+            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: retransmitting broadcast to far(%d)", peer_addr);
             interface->send_packet(phy_addr, curr_packet_ptr, send_size);
         }
     }
@@ -534,18 +540,42 @@ MeshController::MeshController(const char* netname, far_addr_t self_addr_) : sel
 void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshPacket* packet, uint size) {
     if (!MESH_FIELD_ACCESSIBLE(type, size))
         return;
-    if (phy_addr) {
-        printf("got a packet from (" MACSTR "): type=%d, size=%d\n", MAC2STR((ubyte*) phy_addr), (int) packet->type, size);
-        fflush(stdout);
-    }
-    else {
-        printf("got a packet from unknown address: type=%d, size=%d\n", (int) packet->type, size);
-        fflush(stdout);
-    }
-    // todo handle non-secured interfaces as well
-    // todo add encryption for data streams
+
     auto& interface_descr = interfaces[interface_id];
     auto interface = interface_descr.interface;
+
+    // log a new packet
+    if (is_log_feature_present(LogFeatures::TRACE_PACKET_IO)) {
+        const char* address_string;
+
+        if (interface_descr.address_size) {
+            // 3 is strlen("00:") (and \0 instead of ":" at the end of string)
+            // alloca() memory will only free after function returns
+            auto address_str_octets = (char(*)[3]) alloca(3 * interface_descr.address_size);
+
+            auto addr_bytes = (ubyte*) alloca(interface_descr.address_size);
+            interface_descr.interface->write_addr_bytes(phy_addr, addr_bytes);
+
+            // writing octets
+            for (int byte_i = 0; byte_i < interface_descr.address_size; ++byte_i) {
+                sprintf(address_str_octets[byte_i], "%02x", addr_bytes[byte_i]);
+                address_str_octets[byte_i][2] = ':'; // octet separator
+            }
+
+            address_str_octets[interface_descr.address_size - 1][2] = '\0'; // placing null-byte
+            address_string = address_str_octets[0];
+        }
+        else {
+            address_string = "unknown";
+        }
+
+        // logging
+        write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "got a packet from (%u)(%s), type=%d, size: %u",
+                  interface_id, address_string, (int) packet->type, size);
+    }
+
+    // todo handle non-secured interfaces as well
+    // todo add encryption for data streams
 
     far_addr_t tx_addr;
     PeerSessionInfo* session;
@@ -699,7 +729,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
             }
 
             // size is always enough because sending packet through the same interface by which the packet was received
-            write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "sending FAR_PING_RESPONSE to far(%d)", src);
+            write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending FAR_PING_RESPONSE to far(%d)", src);
             interface->send_packet(phy_addr, packet, size);
         }
         else {
@@ -796,7 +826,8 @@ void MeshController::add_interface(MeshInterface* interface) {
     interface->id = interfaces.size();
     interface->controller = this;
     auto props = interface->get_props();
-    interfaces.push_back({interface, props.sessions, props.far_mtu, props.need_secure});
+    interfaces.push_back({interface, props.sessions, props.far_mtu, props.address_size, props.need_secure});
+    write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "sending broadcast hello world");
     interface->send_hello(nullptr);
 }
 
@@ -934,6 +965,7 @@ bool Router::send_packet(MeshPacket* packet, uint size, uint available_size) {
     }
 
     // send
+    write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending some packet to far(%d)", dst_addr);
     interface->send_packet(phy_addr, packet, size);
 
     // free auxiliary memory if allocated
@@ -967,6 +999,7 @@ void Router::discover_route(far_addr_t dst) {
                 generate_packet_signature(&controller, session, far_ping, MESH_CALC_SIZE(far_ping));
             }
 
+            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending FAR_PING packet to far(%d)", dst);
             interface->send_packet(phy_addr, far_ping, MESH_CALC_SIZE(far_ping) + MESH_SECURE_PACKET_OVERHEAD);
 
             peer_list = peer_list->next;
@@ -1302,6 +1335,7 @@ uint Router::write_data_stream_bytes(far_addr_t dst, uint offset, const ubyte* d
             //
         }
 
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending data packet to far(%d)", dst);
         interface->send_packet(phy_addr, packet, send_size);
 
         size -= chunk_size;
