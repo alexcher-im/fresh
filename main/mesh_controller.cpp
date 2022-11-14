@@ -792,6 +792,7 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
     if (packet_type == MeshPacketType::FAR_DATA_PART) {
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet type is FAR_DATA_PART");
         if (!MESH_FIELD_ACCESSIBLE(far_data.part_8, size)) {
+            write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because header size invalid");
             return;
         }
         if (!net_pre_decrement(packet->ttl)) {
@@ -923,6 +924,7 @@ bool Router::send_packet(MeshPacket* packet, uint size, uint available_size) {
         discover_route(dst_addr);
         return true;
     }
+    // todo check for INEXISTING state
     // route is being inspected: save the packet
     if (route_iter->second.state == RouteState::INSPECTING) {
         // save the packet
@@ -1015,7 +1017,7 @@ auto Router::check_packet_cache(decltype(packet_cache.tx_cache)::iterator cache_
     auto entry = start_entry;
 
     // route object is already created when something came into cache
-    auto route = routes[dst];
+    auto& route = routes[dst];
     if (route.state == RouteState::ESTABLISHED) {
         while (entry) {
             if (entry->type == CachedTxDataInfo::CachedDataType::STANDALONE_PACKET) {
@@ -1169,7 +1171,7 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
         return min_bytes_written;
     }
 
-    auto route = routes[dst];
+    auto& route = routes[dst];
 
     if (route.state == RouteState::ESTABLISHED) {
         return write_data_stream_bytes(dst, offset, data, size, force_send, stream_id, stream_size, 0, 0,
