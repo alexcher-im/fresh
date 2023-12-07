@@ -45,6 +45,7 @@ else()
     add_library(${FRESH_PROJECT_NAME} STATIC ${FRESH_SRCS})
     target_include_directories(${FRESH_PROJECT_NAME} PUBLIC "${FRESH_SOURCE_DIR}" "${FRESH_SOURCE_DIR}/interfaces")
     add_executable(fresh_runner "${FRESH_SOURCE_DIR}/../runner/pc.cpp")
+    set_target_properties(fresh_runner PROPERTIES CXX_STANDARD 23)
     target_link_libraries(fresh_runner PRIVATE ${FRESH_PROJECT_NAME})
 
     # link libsodium
@@ -55,4 +56,4 @@ else()
 endif()
 
 # set project properties
-set_target_properties(${FRESH_PROJECT_NAME} PROPERTIES CXX_STANDARD 20)
+set_target_properties(${FRESH_PROJECT_NAME} PROPERTIES CXX_STANDARD 23)

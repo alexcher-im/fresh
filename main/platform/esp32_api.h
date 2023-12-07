@@ -13,8 +13,9 @@
 
 namespace Os
 {
-    typedef TaskHandle_t TaskHandle;
-    typedef mbedtls_sha256_context Sha256Handle;
+    using TaskHandle = TaskHandle_t;
+    using Sha256Handle = mbedtls_sha256_context;
+    constexpr size_t SHA256_DIGEST_SIZE = 32;
 
     inline u64 get_microseconds() {
         return esp_timer_get_time();

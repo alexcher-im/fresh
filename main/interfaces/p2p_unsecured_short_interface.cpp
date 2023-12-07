@@ -58,7 +58,7 @@ bool P2PUnsecuredShortInterface::accept_near_packet(MeshPhyAddrPtr phy_addr, con
 
 MeshPacket* P2PUnsecuredShortInterface::alloc_near_packet(MeshPacketType type, uint size) {
     auto packet = (MeshPacket*) malloc(size);
-    net_store(packet->type, type);
+    packet->type = type;
     return packet;
 }
 
@@ -90,9 +90,9 @@ MeshInterfaceProps P2PUnsecuredShortInterface::get_props() {
 
 void P2PUnsecuredShortInterface::send_hello(MeshPhyAddrPtr phy_addr) {
     auto packet = (MeshPacket*) alloca(MESH_CALC_SIZE(near_hello_insecure));
-    net_store(packet->type, MeshPacketType::NEAR_HELLO);
-    net_store(packet->near_hello_insecure.self_far_addr, controller->self_addr);
-    net_memcpy(packet->near_hello_secure.network_name, controller->network_name, sizeof(controller->network_name));
+    packet->type = MeshPacketType::NEAR_HELLO;
+    packet->near_hello_insecure.self_far_addr = controller->self_addr;
+    memcpy(packet->near_hello_secure.network_name, controller->network_name, sizeof(controller->network_name));
 
     send_packet(phy_addr, packet, MESH_CALC_SIZE(near_hello_insecure));
 }

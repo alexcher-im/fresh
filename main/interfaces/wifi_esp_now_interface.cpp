@@ -1,17 +1,16 @@
 #undef NDEBUG
 
 #include "wifi_esp_now_interface.h"
+#include "../hashes.h"
+#include "sdkconfig.h"
+#include "log_utils.h"
+
 #include <esp_wifi.h>
 #include <esp_now.h>
 #include <esp_wifi_types.h>
 #include <esp_netif.h>
 #include <cstring>
 #include <nvs_flash.h>
-#include "../hashes.h"
-#include "net_utils.h"
-
-#include "sdkconfig.h"
-#include "log_utils.h"
 
 #ifdef CONFIG_IDF_TARGET_ESP8266
 #include <esp_netif.h>
@@ -22,7 +21,7 @@ using namespace MeshProto;
 
 
 DRAM_ATTR static const ubyte BROADCAST_MAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-static QueueHandle_t global_rx_queue_handle = 0;
+static QueueHandle_t global_rx_queue_handle = nullptr;
 
 
 struct RequestQueueData
@@ -33,7 +32,9 @@ struct RequestQueueData
 };
 
 
-static void recv_callback(const ubyte* mac, const ubyte* data, int data_size) {
+static void recv_callback(const esp_now_recv_info_t* esp_now_info, const ubyte* data, int data_size) {
+    auto mac = esp_now_info->src_addr;
+
     if (mac == nullptr || data == nullptr || data_size < 0) {
         printf("esp-now: data error in recv callback\n");
         return;
@@ -108,7 +109,7 @@ void WifiEspNowMeshInterface::check_packets() {
         if (self_addr == data.mac)
             goto packet_end;
 
-        if (net_load(packet->type) == MeshPacketType::NEAR_HELLO_INIT) {
+        if (packet->type == MeshPacketType::NEAR_HELLO_INIT) {
             // packet size check
             if ((ubyte*) ((MacAddr*) packet->near_hello_init.interface_payload + 1) - (ubyte*) packet > data.size) {
                 write_log(controller->self_addr, LogFeatures::TRACE_PACKET_IO, "WifiEspNowMeshInterface: "
@@ -116,7 +117,7 @@ void WifiEspNowMeshInterface::check_packets() {
                 goto packet_end;
             }
 
-            if (net_load(*(MacAddr*)packet->near_hello_init.interface_payload) != self_addr) {
+            if (*(MacAddr*) packet->near_hello_init.interface_payload != self_addr) {
                 goto packet_end;
             }
             data.size -= sizeof(MacAddr);
@@ -130,10 +131,10 @@ void WifiEspNowMeshInterface::check_packets() {
 }
 
 bool WifiEspNowMeshInterface::accept_near_packet(MeshPhyAddrPtr phy_addr, const MeshPacket* packet, uint size) {
-    if (net_load(packet->type) == MeshPacketType::NEAR_HELLO) {
+    if (packet->type == MeshPacketType::NEAR_HELLO) {
         return peer_manager.add_peer((ubyte*) phy_addr, 1);
     }
-    if (net_load(packet->type) == MeshPacketType::NEAR_HELLO_INIT) {
+    if (packet->type == MeshPacketType::NEAR_HELLO_INIT) {
         return peer_manager.add_peer((ubyte*) phy_addr, 1);
     }
     return true;
@@ -143,7 +144,7 @@ MeshPacket* WifiEspNowMeshInterface::alloc_near_packet(MeshPacketType type, uint
     if (type == MeshPacketType::NEAR_HELLO_INIT)
         size += sizeof(MacAddr);
     auto mem = (MeshPacket*) malloc(size);
-    net_store(mem->type, type);
+    mem->type = type;
     return mem;
 }
 
@@ -160,9 +161,9 @@ void WifiEspNowMeshInterface::free_near_packet(MeshPacket* packet) {
 }
 
 void WifiEspNowMeshInterface::send_packet(MeshPhyAddrPtr phy_addr, const MeshProto::MeshPacket* packet, uint size) {
-    if (net_load(packet->type) == MeshPacketType::NEAR_HELLO_INIT) {
+    if (packet->type == MeshPacketType::NEAR_HELLO_INIT) {
         size += sizeof(MacAddr);
-        net_memcpy((MacAddr*) packet->near_hello_init.interface_payload, phy_addr, sizeof(MacAddr));
+        memcpy((MacAddr*) packet->near_hello_init.interface_payload, (MacAddr*) phy_addr, sizeof(MacAddr));
         phy_addr = (MeshPhyAddrPtr) BROADCAST_MAC;
     }
 
@@ -195,7 +196,7 @@ void WifiEspNowMeshInterface::send_hello(MeshPhyAddrPtr phy_addr) {
         phy_addr = (MeshPhyAddrPtr) BROADCAST_MAC;
 
     auto packet = (MeshPacket*) alloca(MESH_CALC_SIZE(near_hello_secure));
-    net_store(packet->type, MeshPacketType::NEAR_HELLO);
+    packet->type = MeshPacketType::NEAR_HELLO;
     memcpy(packet->near_hello_secure.network_name, controller->network_name, sizeof(controller->network_name));
 
     send_packet(phy_addr, packet, MESH_CALC_SIZE(near_hello_secure));

@@ -1,12 +1,12 @@
 #pragma once
 
-#include <list>
-#include <vector>
 #include "types.h"
-#include <functional>
 #include "mesh_protocol.h"
 #include "mesh_base_interface.h"
 #include "platform/api.h"
+#include <list>
+#include <vector>
+#include <functional>
 
 
 namespace NsMeshController
@@ -155,6 +155,7 @@ namespace NsMeshController
 
     class Router
     {
+        friend class ::MeshController;
     public:
         MeshController& controller;
 
@@ -192,6 +193,10 @@ namespace NsMeshController
         uint write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, const ubyte* data, uint size,
                                      bool force_send, ubyte stream_id, uint stream_size, ubyte broadcast_ttl,
                                      MeshProto::far_addr_t broadcast_src_addr, Route& route, Peer& peer);
+
+    protected:
+        void add_rx_data_packet_to_cache(DataStreamIdentity identity, uint offset, ubyte* data, uint size,
+                                         ubyte broadcast_ttl = 0);
     };
 
     class DataStream
@@ -238,7 +243,9 @@ public:
 
     std::function<void(MeshProto::far_addr_t, const ubyte*, ushort)> user_stream_handler = default_stream_handler;
 
-    MeshController(const char* netname, MeshProto::far_addr_t self_addr_);
+    MeshController(const char* netname, MeshProto::far_addr_t self_addr_, bool run_thread_poll_task = true);
+
+    void run_thread_poll_task();
 
     void on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshProto::MeshPacket* packet, uint size);
 
@@ -250,7 +257,7 @@ public:
 
     void set_psk_password(const char* password);
 
-    inline bool netname_cmp(const ubyte* name) const {
+    inline bool netname_cmp(const u8le* name) const {
         for (int i = 0; i < 16; ++i) {
             if (network_name[i] != name[i])
                 return false;
@@ -263,9 +270,37 @@ public:
     ~MeshController();
 
 protected:
+    friend class NsMeshController::Router;
+
     void check_data_streams();
 
     static void default_stream_handler(MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
         printf("Received a data stream!\n");
     }
+
+    void handle_near_secure(uint interface_id, MeshPhyAddrPtr phy_addr, MeshProto::MeshPacket* packet, uint size);
+
+    void handle_near_insecure(uint interface_id, MeshPhyAddrPtr phy_addr, MeshProto::MeshPacket* packet, uint size);
+
+    bool handle_data_first_packet(MeshProto::PacketFarDataFirst* packet, uint payload_size,
+                                  MeshProto::far_addr_t src, MeshProto::far_addr_t dst);
+
+    bool handle_data_part_packet(MeshProto::PacketFarDataPart8* packet, uint payload_size,
+                                 MeshProto::far_addr_t src, MeshProto::far_addr_t dst);
+
+    void retransmit_packet_first_broadcast(MeshProto::MeshPacket* packet, uint packet_size, uint allocated_packet_size,
+                                           MeshProto::far_addr_t src_addr, uint payload_size);
+
+    void retransmit_packet_part_broadcast(MeshProto::MeshPacket* packet, uint packet_size, uint allocated_packet_size,
+                                          MeshProto::far_addr_t src_addr, uint payload_size);
+
+    bool check_stream_completeness(const NsMeshController::DataStreamIdentity& identity,
+                                   NsMeshController::DataStream& stream);
+
+    void compete_data_stream(ubyte* data, uint size, MeshProto::far_addr_t src_addr, MeshProto::far_addr_t dst_addr);
+
+    MeshProto::hashdigest_t calc_packet_signature(const PeerSessionInfo* session,
+                                                  MeshProto::MeshPacket* packet, uint size, u64 timestamp) const;
+
+    void generate_packet_signature(const PeerSessionInfo* session, MeshProto::MeshPacket* packet, uint size) const;
 };

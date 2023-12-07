@@ -59,6 +59,6 @@ constexpr bool is_log_feature_present(LogFeatures::Enum components) {
 
 #define write_log(address, feature, string, ...) do {            \
 if constexpr (is_log_feature_present(feature)) {                 \
-printf("[%u]: " string "\n", address __VA_OPT__(,) __VA_ARGS__); \
+printf("[%u]: " string "\n", (uint) address __VA_OPT__(,) __VA_ARGS__); \
 fflush(stdout);                                                  \
 } } while(0)

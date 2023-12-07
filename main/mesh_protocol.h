@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstring>
-#include "types.h"
+#include "blob_types.h"
 
 
 #pragma pack(push, 1)
@@ -14,15 +14,24 @@ namespace MeshProto
     // must be able to provide a uniformed and cross-interface address, unique and sole to a physical device
     // must be able to protect against spoofing, replay attacks
 
-    typedef uint hashdigest_t;
-    typedef ubyte nonce_t[8];
-    typedef ubyte session_key_t[8];
-    typedef u64 timestamp_t;
-    typedef uint far_addr_t;
+    // regular versions
+    // todo name types in CamelCase
+    using hashdigest_t = uint;
+    using nonce_t = ubyte[8];
+    using session_key_t = ubyte[8];
+    using timestamp_t = u64;
+    using far_addr_t = uint;
+    using stream_id_t = ubyte;
+
+    // serialized versions
+    using ser_hashdigest_t   = BlobType<hashdigest_t,  std::endian::little>;
+    using ser_nonce_t        = BlobType<nonce_t,       std::endian::little>;
+    using ser_session_key_t  = BlobType<session_key_t, std::endian::little>;
+    using ser_timestamp_t    = BlobType<timestamp_t,   std::endian::little>;
+    using ser_far_addr_t     = BlobType<far_addr_t,    std::endian::little>;
+    using ser_stream_id_t    = BlobType<stream_id_t,   std::endian::little>;
 
     const far_addr_t BROADCAST_FAR_ADDR = -1;
-
-    // all integers are little-endian
 
     enum class MeshPacketType : ubyte
     {
@@ -93,7 +102,7 @@ namespace MeshProto
     // broadcasting this packet to make nearby network members suggest you to join
     struct PacketNearHelloSecure
     {
-        ubyte network_name[16];
+        u8le network_name[16];
         ubyte interface_payload[0];
     };
 
@@ -101,7 +110,7 @@ namespace MeshProto
     // initiates a secure session establishment
     struct PacketNearHelloInit
     {
-        nonce_t member_nonce; // this does not require any signing/protection
+        ser_nonce_t member_nonce; // this does not require any signing/protection
         ubyte interface_payload[0];
     };
 
@@ -111,10 +120,10 @@ namespace MeshProto
     // all fields must be signed to ensure this packet is not MITM-ed and selectively changed
     struct PacketNearHelloAuthorize
     {
-        session_key_t session_key;
-        timestamp_t initial_timestamp;
-        far_addr_t self_far_addr;
-        hashdigest_t hash; // packet sign with PSK (hash of all fields, concatenated with PSK)
+        ser_session_key_t session_key;
+        ser_timestamp_t initial_timestamp;
+        ser_far_addr_t self_far_addr;
+        ser_hashdigest_t hash; // packet sign with PSK (hash of all fields, concatenated with PSK)
         ubyte interface_payload[0];
     };
 
@@ -124,33 +133,33 @@ namespace MeshProto
     // all fields must be signed to ensure this packet is not MITM-ed and selectively changed
     struct PacketNearHelloJoinedSecure
     {
-        timestamp_t initial_timestamp;
-        far_addr_t self_far_addr;
-        hashdigest_t hash; // packet sign with PSK+session_key
+        ser_timestamp_t initial_timestamp;
+        ser_far_addr_t self_far_addr;
+        ser_hashdigest_t hash; // packet sign with PSK+session_key
         ubyte interface_payload[0];
     };
 
     // insecure mesh join
     struct PacketNearHelloInsecure
     {
-        ubyte network_name[16];
-        far_addr_t self_far_addr;
+        u8le network_name[16];
+        ser_far_addr_t self_far_addr;
         ubyte interface_payload[0];
     };
 
     struct PacketNearHelloJoinedInsecure
     {
-        far_addr_t self_far_addr;
+        ser_far_addr_t self_far_addr;
         ubyte interface_payload[0];
     };
 
     // other packets
     struct PacketFarPing
     {
-        ubyte routers_passed;
+        u8le routers_passed;
         // mtu discovery data:
-        ubyte router_num_with_min_mtu;
-        uint min_mtu;
+        u8le router_num_with_min_mtu;
+        u32le min_mtu;
     };
 
     struct PacketFarPingResponse : public PacketFarPing
@@ -160,22 +169,15 @@ namespace MeshProto
 
     struct PacketFarDataFirst
     {
-        ubyte stream_id;
-        ushort stream_size;
+        ser_stream_id_t stream_id;
+        u16le stream_size;
         ubyte payload[0];
     };
 
     struct PacketFarDataPart8
     {
-        ubyte stream_id;
-        ushort offset;
-        ubyte payload[0];
-    };
-
-    struct PacketFarDataPart16
-    {
-        ubyte stream_id;
-        ushort offset;
+        ser_stream_id_t stream_id;
+        u16le offset;
         ubyte payload[0];
     };
 
@@ -188,9 +190,9 @@ namespace MeshProto
 
     struct MessageSign
     {
-        timestamp_t timestamp;
-        session_key_t session_key;
-        hashdigest_t hash;
+        ser_timestamp_t timestamp;
+        ser_session_key_t session_key;
+        ser_hashdigest_t hash;
     };
 
     struct MeshPacket
@@ -198,6 +200,8 @@ namespace MeshProto
         MeshPacketType type;
 
         union {
+            u8le near_packets[0];
+
             // near:
             PacketNearHelloSecure near_hello_secure;
             PacketNearHelloInit near_hello_init;
@@ -207,24 +211,22 @@ namespace MeshProto
             PacketNearHelloInsecure near_hello_insecure;
             PacketNearHelloJoinedInsecure near_hello_joined_insecure;
 
-            ubyte near_packets[0];
-
             // optimized far:
             DataStream opt_data;
 
             // far:
             struct {
-                ubyte ttl;
-                far_addr_t src_addr;
-                far_addr_t dst_addr;
+                u8le ttl;
+                ser_far_addr_t src_addr;
+                ser_far_addr_t dst_addr;
 
                 union {
-                    PacketFarPing far_ping;
-                    PacketFarPingResponse far_ping_response;
+                    PacketFarPing ping;
+                    PacketFarPingResponse ping_response;
 
-                    DataStream far_data; // including broadcasts
+                    DataStream data; // including broadcasts
                 };
-            };
+            } far;
         };
 
         MeshPacket() = delete;

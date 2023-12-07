@@ -18,8 +18,9 @@
 
 namespace Os
 {
-    typedef std::thread TaskHandle;
-    typedef crypto_hash_sha256_state Sha256Handle;
+    using TaskHandle = std::thread;
+    using Sha256Handle = crypto_hash_sha256_state;
+    constexpr size_t SHA256_DIGEST_SIZE = 32;
 
     inline std::random_device g_random_device;
 

@@ -1,5 +1,7 @@
 #pragma once
 
+// todo remove this header later (it is currently used by projects that depend on fresh)
+
 
 // GCC in ESP-IDF v4.x didn't require this header for std::endian
 #if __cplusplus > 201709L

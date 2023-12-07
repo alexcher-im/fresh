@@ -1,7 +1,7 @@
 #include "mesh_stream_builder.h"
 
 
-decltype(MeshProto::PacketFarDataFirst::stream_id) MeshStreamBuilder::g_stream_id = 0;
+MeshProto::stream_id_t MeshStreamBuilder::g_stream_id = 0;
 
 MeshStreamBuilder::MeshStreamBuilder(MeshController& controller_, MeshProto::far_addr_t dst_addr_, uint size) : stream_size(size),
 dst_addr(dst_addr_), controller(controller_), stream_id(g_stream_id++), cache((ubyte*) malloc(0)) {
