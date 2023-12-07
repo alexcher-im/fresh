@@ -238,6 +238,8 @@ public:
 
     std::function<void(MeshProto::far_addr_t, const ubyte*, ushort)> user_stream_handler = default_stream_handler;
 
+    std::function<void(MeshProto::far_addr_t)> new_peer_callback = default_new_peer_handler;
+
     MeshController(const char* netname, MeshProto::far_addr_t self_addr_);
 
     void on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshProto::MeshPacket* packet, uint size);
@@ -267,5 +269,9 @@ protected:
 
     static void default_stream_handler(MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
         printf("Received a data stream!\n");
+    }
+
+    static void default_new_peer_handler(MeshProto::far_addr_t peer_addr) {
+        printf("New peer! %d\n", peer_addr);
     }
 };

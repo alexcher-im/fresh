@@ -458,7 +458,7 @@ static inline void retransmit_packet_first_broadcast(MeshController& controller,
             }
 
             // sending directly into interface
-            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: retransmitting broadcast to far(%d)", peer_addr);
+            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: retransmitting broadcast to far(%u)", peer_addr);
             interface->send_packet(phy_addr, curr_packet_ptr, send_size);
         }
     }
@@ -511,7 +511,7 @@ static inline void retransmit_packet_part_broadcast(MeshController& controller, 
             }
 
             // sending directly into interface
-            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: retransmitting broadcast to far(%d)", peer_addr);
+            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: retransmitting broadcast to far(%u)", peer_addr);
             interface->send_packet(phy_addr, curr_packet_ptr, send_size);
         }
     }
@@ -614,7 +614,8 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
         tx_addr = session->secure.peer_far_addr;
 
         if (timestamp < session->secure.prev_peer_timestamp) {
-            write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because security timestamp invalid");
+            write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because security timestamp invalid prev_peer_timestamp=%llu timestamp=%llu",
+                      session->secure.prev_peer_timestamp, timestamp);
             return;
         }
 
@@ -724,12 +725,12 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
             net_store(packet->src_addr, self_addr);
 
             if (interface_descr.is_secured) {
-                size += MESH_SECURE_PACKET_OVERHEAD;
                 generate_packet_signature(this, session, packet, size);
+                size += MESH_SECURE_PACKET_OVERHEAD;
             }
 
             // size is always enough because sending packet through the same interface by which the packet was received
-            write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending FAR_PING_RESPONSE to far(%d)", src);
+            write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending FAR_PING_RESPONSE to far(%u)", src);
             interface->send_packet(phy_addr, packet, size);
         }
         else {
@@ -967,7 +968,7 @@ bool Router::send_packet(MeshPacket* packet, uint size, uint available_size) {
     }
 
     // send
-    write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending some packet to far(%d)", dst_addr);
+    write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending some packet to far(%u)", dst_addr);
     interface->send_packet(phy_addr, packet, size);
 
     // free auxiliary memory if allocated
@@ -1001,7 +1002,7 @@ void Router::discover_route(far_addr_t dst) {
                 generate_packet_signature(&controller, session, far_ping, MESH_CALC_SIZE(far_ping));
             }
 
-            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending FAR_PING packet to far(%d)", dst);
+            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending FAR_PING packet to far(%u)", dst);
             interface->send_packet(phy_addr, far_ping, MESH_CALC_SIZE(far_ping) + MESH_SECURE_PACKET_OVERHEAD);
 
             peer_list = peer_list->next;
@@ -1180,12 +1181,14 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
 
     // drop the data
     if (route.state == RouteState::INEXISTING) {
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET, "dropping packet to %u because route does not exist", dst);
         return size;
     }
 
     // start discovering route, save data
     if (route.state == RouteState::UNKNOWN) {
         route.state = RouteState::INSPECTING;
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET, "saving packet to %u because route unknown", dst);
         route.time_started = Os::get_microseconds();
         discover_route(dst);
     }
@@ -1194,6 +1197,8 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
     if (route.state == RouteState::INSPECTING) {
         auto saved_data = malloc(size);
         memcpy(saved_data, data, size);
+
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET, "saving packet to %u because route is now discovering", dst);
 
         auto& first_entry = packet_cache.tx_cache[dst];
         auto entry = &first_entry;
@@ -1227,9 +1232,9 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
 
         // found existing stream
         else {
-            auto new_entry = (CachedTxDataStreamPart*) malloc(sizeof(CachedTxDataStreamPart));
-            *new_entry = entry->data_stream.part;
-            entry->data_stream.part.next = new_entry;
+            auto new_part = (CachedTxDataStreamPart*) malloc(sizeof(CachedTxDataStreamPart));
+            *new_part = entry->data_stream.part;
+            entry->data_stream.part.next = new_part;
 
             entry->data_stream.part.offset = offset;
             entry->data_stream.part.size = size;
@@ -1337,7 +1342,7 @@ uint Router::write_data_stream_bytes(far_addr_t dst, uint offset, const ubyte* d
             //
         }
 
-        write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending data packet to far(%d)", dst);
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending data packet to far(%u)", dst);
         interface->send_packet(phy_addr, packet, send_size);
 
         size -= chunk_size;
@@ -1360,6 +1365,8 @@ void Router::add_peer(MeshProto::far_addr_t peer, MeshInterface* interface) {
         stored.next = new_peer;
     }
     stored.interface = interface;
+
+    controller.new_peer_callback(peer);
 }
 
 bool NsMeshController::DataStream::add_data(ushort offset, const ubyte* data, ushort size) {
