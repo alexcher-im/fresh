@@ -249,10 +249,12 @@ public:
         // todo pass ownership of packet memory to this handler
         std::function<void(MeshProto::far_addr_t, const ubyte*, ushort)> on_data_packet = default_data_handler;
         std::function<void(const char*)> packet_tracing_log = default_packet_tracing_log_handler;
+        std::function<void(MeshProto::far_addr_t)> new_peer = default_new_peer_handler;
     } callbacks;
 
-    // todo this one is deprecated, use callbacks.on_data_packet
+    // todo these two one are deprecated, use callbacks.on_data_packet and callbacks.new_peer
     std::function<void(MeshProto::far_addr_t, const ubyte*, ushort)> user_stream_handler = default_data_handler;
+    std::function<void(MeshProto::far_addr_t)> new_peer_callback = default_new_peer_handler;
 
     MeshController(const char* netname, MeshProto::far_addr_t self_addr_, bool run_thread_poll_task = true);
 
@@ -291,6 +293,10 @@ protected:
 
     static void default_data_handler(MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
         printf("Received a data stream!\n");
+    }
+
+    static void default_new_peer_handler(MeshProto::far_addr_t peer_addr) {
+        printf("New peer! %u\n", (uint) peer_addr);
     }
 
     void handle_near_secure(uint interface_id, MeshPhyAddrPtr phy_addr, MeshProto::MeshPacket* packet, uint size,

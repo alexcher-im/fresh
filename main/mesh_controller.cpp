@@ -685,7 +685,9 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
         if (timestamp < session->secure.prev_peer_timestamp) {
             packet_log.write("DISCARD (security timestamp is not valid: got {}, expected{}+)",
                              timestamp, session->secure.prev_peer_timestamp);
-            write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because security timestamp invalid");
+            write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because security timestamp invalid "
+                                                            "prev_peer_timestamp=%llu timestamp=%llu",
+                                                            session->secure.prev_peer_timestamp, timestamp);
             goto end;
         }
 
@@ -1101,7 +1103,8 @@ void Router::discover_route(far_addr_t dst) {
                 controller.generate_packet_signature(session, far_ping, MESH_CALC_SIZE(far.ping));
             }
 
-            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending FAR_PING packet to far(%u)", (uint) dst);
+            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending FAR_PING packet to far(%u)",
+                      (uint) dst);
             interface->send_packet(phy_addr, far_ping, MESH_CALC_SIZE(far.ping) + MESH_SECURE_PACKET_OVERHEAD);
 
             peer_list = peer_list->next;
@@ -1280,12 +1283,15 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
 
     // drop the data
     if (route.state == RouteState::INEXISTING) {
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET, "dropping packet to %u because route does not exist",
+                  (uint) dst);
         return size;
     }
 
     // start discovering route, save data
     if (route.state == RouteState::UNKNOWN) {
         route.state = RouteState::INSPECTING;
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET, "saving packet to %u because route unknown", (uint) dst);
         route.time_started = Os::get_microseconds();
         discover_route(dst);
     }
@@ -1294,6 +1300,9 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
     if (route.state == RouteState::INSPECTING) {
         auto saved_data = malloc(size);
         memcpy(saved_data, data, size);
+
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET, "saving packet to %u because route is now discovering",
+                  (uint) dst);
 
         auto& first_entry = packet_cache.tx_cache[dst];
         auto entry = &first_entry;
@@ -1327,9 +1336,9 @@ uint Router::write_data_stream_bytes(MeshProto::far_addr_t dst, uint offset, con
 
         // found existing stream
         else {
-            auto new_entry = (CachedTxDataStreamPart*) malloc(sizeof(CachedTxDataStreamPart));
-            *new_entry = entry->data_stream.part;
-            entry->data_stream.part.next = new_entry;
+            auto new_part = (CachedTxDataStreamPart*) malloc(sizeof(CachedTxDataStreamPart));
+            *new_part = entry->data_stream.part;
+            entry->data_stream.part.next = new_part;
 
             entry->data_stream.part.offset = offset;
             entry->data_stream.part.size = size;
@@ -1460,6 +1469,9 @@ void Router::add_peer(MeshProto::far_addr_t peer, MeshInterface* interface) {
         stored.next = new_peer;
     }
     stored.interface = interface;
+
+    // todo do not call this immediately, queue it and call later
+    controller.new_peer_callback(peer);
 }
 
 bool NsMeshController::DataStream::add_data(ushort offset, const ubyte* data, ushort size) {
