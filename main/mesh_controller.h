@@ -4,9 +4,13 @@
 #include "mesh_protocol.h"
 #include "mesh_base_interface.h"
 #include "platform/api.h"
+
 #include <list>
 #include <vector>
 #include <functional>
+
+
+class PacketLog;
 
 
 namespace NsMeshController
@@ -233,15 +237,22 @@ namespace NsMeshController
 class MeshController
 {
 public:
-    ubyte network_name[16];
-    ubyte pre_shared_key[16];
+    std::array<ubyte, 16> network_name{};
+    std::array<ubyte, 16> pre_shared_key{};
     std::vector<NsMeshController::InterfaceInternalParams> interfaces;
     NsMeshController::Router router{*this};
     MeshProto::far_addr_t self_addr;
     Os::TaskHandle check_packets_task_handle;
     std::unordered_map<NsMeshController::DataStreamIdentity, NsMeshController::DataStream> data_streams; // this should be in Router
 
-    std::function<void(MeshProto::far_addr_t, const ubyte*, ushort)> user_stream_handler = default_stream_handler;
+    struct Callbacks {
+        // todo pass ownership of packet memory to this handler
+        std::function<void(MeshProto::far_addr_t, const ubyte*, ushort)> on_data_packet = default_data_handler;
+        std::function<void(const char*)> packet_tracing_log = default_packet_tracing_log_handler;
+    } callbacks;
+
+    // todo this one is deprecated, use callbacks.on_data_packet
+    std::function<void(MeshProto::far_addr_t, const ubyte*, ushort)> user_stream_handler = default_data_handler;
 
     MeshController(const char* netname, MeshProto::far_addr_t self_addr_, bool run_thread_poll_task = true);
 
@@ -274,25 +285,31 @@ protected:
 
     void check_data_streams();
 
-    static void default_stream_handler(MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
+    static void default_packet_tracing_log_handler(const char* string) {
+        printf("tracing: %s\n", string);
+    }
+
+    static void default_data_handler(MeshProto::far_addr_t src_addr, const ubyte* data, ushort size) {
         printf("Received a data stream!\n");
     }
 
-    void handle_near_secure(uint interface_id, MeshPhyAddrPtr phy_addr, MeshProto::MeshPacket* packet, uint size);
+    void handle_near_secure(uint interface_id, MeshPhyAddrPtr phy_addr, MeshProto::MeshPacket* packet, uint size,
+                            PacketLog& packet_log);
 
-    void handle_near_insecure(uint interface_id, MeshPhyAddrPtr phy_addr, MeshProto::MeshPacket* packet, uint size);
+    void handle_near_insecure(uint interface_id, MeshPhyAddrPtr phy_addr, MeshProto::MeshPacket* packet, uint size,
+                              PacketLog& packet_log);
 
     bool handle_data_first_packet(MeshProto::PacketFarDataFirst* packet, uint payload_size,
-                                  MeshProto::far_addr_t src, MeshProto::far_addr_t dst);
+                                  MeshProto::far_addr_t src, MeshProto::far_addr_t dst, PacketLog& packet_log);
 
     bool handle_data_part_packet(MeshProto::PacketFarDataPart8* packet, uint payload_size,
-                                 MeshProto::far_addr_t src, MeshProto::far_addr_t dst);
+                                 MeshProto::far_addr_t src, MeshProto::far_addr_t dst, PacketLog& packet_log);
 
     void retransmit_packet_first_broadcast(MeshProto::MeshPacket* packet, uint packet_size, uint allocated_packet_size,
-                                           MeshProto::far_addr_t src_addr, uint payload_size);
+                                           MeshProto::far_addr_t src_addr, uint payload_size, PacketLog& packet_log);
 
     void retransmit_packet_part_broadcast(MeshProto::MeshPacket* packet, uint packet_size, uint allocated_packet_size,
-                                          MeshProto::far_addr_t src_addr, uint payload_size);
+                                          MeshProto::far_addr_t src_addr, uint payload_size, PacketLog& packet_log);
 
     bool check_stream_completeness(const NsMeshController::DataStreamIdentity& identity,
                                    NsMeshController::DataStream& stream);

@@ -93,7 +93,7 @@ WifiEspNowMeshInterface::WifiEspNowMeshInterface() {
     ESP_ERROR_CHECK(esp_now_register_recv_cb(recv_callback));
 
     // set self mac
-    esp_wifi_get_mac(WIFI_IF_STA, self_addr.raw);
+    esp_wifi_get_mac(WIFI_IF_STA, self_addr.raw.data());
 
     peer_manager.add_peer(BROADCAST_MAC, 0);
     rx_queue = xQueueCreate(MAX_QUEUED_RX_PACKETS, sizeof(RequestQueueData));
@@ -186,7 +186,7 @@ WifiEspNowMeshInterface::~WifiEspNowMeshInterface() {
 far_addr_t WifiEspNowMeshInterface::derive_far_addr_uint32() {
     far_addr_t addr_output{};
     uint hash_output;
-    crc32(self_addr.raw, 6, (ubyte*) &hash_output);
+    crc32((ubyte*) &self_addr.raw, sizeof(MacAddr), (ubyte*) &hash_output);
     memcpy(&addr_output, &hash_output, std::min(sizeof(uint), sizeof(far_addr_t)));
     return addr_output;
 }
@@ -197,7 +197,7 @@ void WifiEspNowMeshInterface::send_hello(MeshPhyAddrPtr phy_addr) {
 
     auto packet = (MeshPacket*) alloca(MESH_CALC_SIZE(near_hello_secure));
     packet->type = MeshPacketType::NEAR_HELLO;
-    memcpy(packet->near_hello_secure.network_name, controller->network_name, sizeof(controller->network_name));
+    memcpy(&packet->near_hello_secure.network_name, controller->network_name.data(), sizeof(controller->network_name));
 
     send_packet(phy_addr, packet, MESH_CALC_SIZE(near_hello_secure));
 }

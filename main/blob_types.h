@@ -23,6 +23,9 @@ public:
     }
     constexpr BlobInteger(const BlobInteger& src) = default;
 
+    template <typename TStrong> requires (std::is_base_of_v<BaseStrongType, TStrong>)
+    constexpr BlobInteger(TStrong strong) : BlobInteger((T) strong) { }
+
     constexpr operator T() const { // implicit
         if constexpr (aligned) {
             return serialize(native_value);
@@ -34,6 +37,9 @@ public:
         }
     }
 
+    template <typename TStrong> requires (std::is_base_of_v<BaseStrongType, TStrong>)
+    constexpr explicit operator TStrong() const { return (TStrong) (T) *this; };
+
     constexpr BlobInteger& operator=(T other) {
         auto serialized = serialize(other);
 
@@ -44,6 +50,9 @@ public:
 
         return *this;
     }
+
+    template <typename TStrong> requires (std::is_base_of_v<BaseStrongType, TStrong>)
+    constexpr BlobInteger& operator=(TStrong strong) { return *this = (T) strong; }
 
     constexpr static T serialize(T src) {
         if constexpr (std::endian::native == endian)
@@ -153,7 +162,7 @@ using f64ieee_aligned = BlobFloat<float, true>;
 template <typename T, std::endian endian, bool aligned = false>
 struct BlobType_Class;
 
-template <typename T, std::endian endian, bool aligned = false>
+template <typename T, std::endian endian = std::endian::little, bool aligned = false>
 using BlobType = typename BlobType_Class<T, endian, aligned>::type;
 
 
@@ -165,6 +174,11 @@ struct BlobType_Class<T, endian, aligned> {
 template <typename T, std::endian endian, bool aligned> requires(std::is_floating_point_v<T>)
 struct BlobType_Class<T, endian, aligned> {
     using type = BlobFloat<T, aligned>;
+};
+
+template <typename T, std::endian endian, bool aligned> requires(std::is_base_of_v<BaseStrongType, T>)
+struct BlobType_Class<T, endian, aligned> {
+    using type = BlobType<typename T::InternalT, endian, aligned>;
 };
 
 template <typename T, std::endian endian, bool aligned> requires(std::is_array_v<T>)

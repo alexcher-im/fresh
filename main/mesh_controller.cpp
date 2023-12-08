@@ -1,7 +1,8 @@
 #include "mesh_controller.h"
-#include "net_utils.h"
 #include "log_utils.h"
+
 #include <new>
+#include <string_view>
 
 
 using namespace MeshProto;
@@ -9,6 +10,7 @@ using namespace NsMeshController;
 
 // todo move this function somewhere outside
 // todo do not create tasks for every packet, make another api
+// todo send NEAR_HELLO frames through some interfaces (such as wifi) to discover new clients in case of their packet loss
 static inline void print_bytes(const ubyte* buf, uint size) {
     for (int i = 0; i < size; ++i) {
         printf("%02x", buf[i]);
@@ -35,22 +37,12 @@ struct MessageHashConcatParams
 // todo versify that size excludes secure interface overhead (but packet is allocated to have enough space for signature)
 hashdigest_t MeshController::calc_packet_signature(const PeerSessionInfo* session,
                                                    MeshPacket* packet, uint size, u64 timestamp) const {
-    static_assert(sizeof(hashdigest_t) <= sizeof(std::array<ubyte, Os::SHA256_DIGEST_SIZE>));
+    MessageHashConcatParams hash_concat_params{size, timestamp, pre_shared_key, session->secure.session_key};
 
-    std::array<ubyte, Os::SHA256_DIGEST_SIZE> res;
-
-    MessageHashConcatParams hash_concat_params;
-    hash_concat_params.packet_size = size;
-    hash_concat_params.timestamp = timestamp;
-    net_loadstore_nonscalar(hash_concat_params.psk, pre_shared_key);
-    net_loadstore_nonscalar(hash_concat_params.session_key, session->secure.session_key);
-
-    auto hash_ctx = Os::create_sha256();
-    Os::update_sha256(&hash_ctx, packet, size);
-    Os::update_sha256(&hash_ctx, &hash_concat_params, sizeof(MessageHashConcatParams));
-    Os::finish_sha256(&hash_ctx, res.data());
-
-    return *(hashdigest_t*) res.data();
+    auto hash_ctx = Os::Sha256Hasher();
+    hash_ctx.update(packet, size);
+    hash_ctx.update(&hash_concat_params, sizeof(MessageHashConcatParams));
+    return hash_ctx.finish<hashdigest_t>();
 }
 
 void MeshController::generate_packet_signature(const PeerSessionInfo* session, MeshPacket* packet, uint size) const {
@@ -77,6 +69,8 @@ struct CompletedStreamInfo
 static void task_handle_packet(void* userdata) {
     auto info = (CompletedStreamInfo*) userdata;
     info->controller->user_stream_handler(info->src_addr, info->data, info->size);
+    if (info->controller->callbacks.on_data_packet)
+        info->controller->callbacks.on_data_packet(info->src_addr, info->data, info->size);
 
     free(info->data);
     Os::detach_task(info->curr_task);
@@ -115,26 +109,39 @@ bool MeshController::check_stream_completeness(const DataStreamIdentity& identit
 }
 
 // todo add controller.router.routes() (router.add_route()) for new peers
-void MeshController::handle_near_secure(uint interface_id, MeshPhyAddrPtr phy_addr, MeshPacket* packet, uint size) {
+void MeshController::handle_near_secure(uint interface_id, MeshPhyAddrPtr phy_addr, MeshPacket* packet, uint size,
+                                        PacketLog& packet_log) {
     auto& interface_descr = interfaces[interface_id];
     auto interface = interface_descr.interface;
     auto packet_type = packet->type;
 
     if (packet_type == MeshPacketType::NEAR_HELLO) {
-        if (!MESH_FIELD_ACCESSIBLE(near_hello_secure, size))
+        packet_log.write("NEAR_HELLO");
+
+        if (!MESH_FIELD_ACCESSIBLE(near_hello_secure, size)) {
+            packet_log.write("DISCARD (small size: near_hello_secure is not accessible)");
             return;
-        if (!netname_cmp(packet->near_hello_secure.network_name))
+        }
+        if (!netname_cmp(packet->near_hello_secure.network_name)) {
+            packet_log.write("DISCARD (network name mismatched: {:s})",
+                             std::string_view((char*) packet->near_hello_secure.network_name,
+                                              sizeof(packet->near_hello_secure.network_name)));
             return;
+        }
 
         // checks
         auto est_session = interface_descr.sessions->get_or_create_est_session(phy_addr);
-        if (est_session->stage != PeerSecureSessionEstablishmentStage::UNKNOWN)
+        if (est_session->stage != PeerSecureSessionEstablishmentStage::UNKNOWN) {
+            packet_log.write("DISCARD (est session for this sender is already associated)");
             return;
+        }
 
         if (!interface->accept_near_packet(phy_addr, packet, size)) {
+            packet_log.write("DISCARD (interface did not accept packet)");
             interface_descr.sessions->remove_est_session(phy_addr);
             return;
         }
+
         // setting est session
         est_session->stage = PeerSecureSessionEstablishmentStage::WAITING_FOR_HELLO_AUTH;
         est_session->time_start = Os::get_microseconds();
@@ -143,9 +150,10 @@ void MeshController::handle_near_secure(uint interface_id, MeshPhyAddrPtr phy_ad
         // generating response packet
         auto packet_size = MESH_CALC_SIZE(near_hello_init);
         auto init_packet = interface->alloc_near_packet(MeshPacketType::NEAR_HELLO_INIT, packet_size);
-        net_loadstore_nonscalar(init_packet->near_hello_init.member_nonce, est_session->peer_nonce);
+        init_packet->near_hello_init.member_nonce = est_session->peer_nonce;
 
         // sending
+        packet_log.write("sending NEAR_HELLO_INIT");
         write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending secure NEAR_HELLO_INIT");
         interface->send_packet(phy_addr, init_packet, packet_size);
         interface->free_near_packet(init_packet);
@@ -153,15 +161,22 @@ void MeshController::handle_near_secure(uint interface_id, MeshPhyAddrPtr phy_ad
     }
 
     else if (packet_type == MeshPacketType::NEAR_HELLO_INIT) {
-        if (!MESH_FIELD_ACCESSIBLE(near_hello_init, size))
+        packet_log.write("NEAR_HELLO_INIT");
+
+        if (!MESH_FIELD_ACCESSIBLE(near_hello_init, size)) {
+            packet_log.write("DISCARD (small size: near_hello_init is not accessible)");
             return;
+        }
 
         // checks
         auto est_session = interface_descr.sessions->get_or_create_est_session(phy_addr);
-        if (est_session->stage != PeerSecureSessionEstablishmentStage::UNKNOWN)
+        if (est_session->stage != PeerSecureSessionEstablishmentStage::UNKNOWN) {
+            packet_log.write("DISCARD (est session for this sender is already associated)");
             return;
+        }
 
         if (!interface->accept_near_packet(phy_addr, packet, size)) {
+            packet_log.write("DISCARD (interface did not accept packet)");
             interface_descr.sessions->remove_est_session(phy_addr);
             return;
         }
@@ -173,21 +188,19 @@ void MeshController::handle_near_secure(uint interface_id, MeshPhyAddrPtr phy_ad
         // generating response packet
         auto packet_size = MESH_CALC_SIZE(near_hello_authorize);
         auto auth_packet = interface->alloc_near_packet(MeshPacketType::HEAR_HELLO_AUTHORIZE, packet_size);
-        net_loadstore_nonscalar(auth_packet->near_hello_authorize.session_key, est_session->session_info.session_key);
+        auth_packet->near_hello_authorize.session_key = est_session->session_info.session_key;
         auth_packet->near_hello_authorize.self_far_addr = self_addr;
         auth_packet->near_hello_authorize.initial_timestamp = Os::get_microseconds();
 
-        // generating hash (packet sign)
-        ubyte hash_digest[32];
+        // generating hash (packet signature)
         auto hash_src_size = offsetof(MeshPacket, near_hello_authorize.hash) + sizeof(pre_shared_key);
         ubyte hash_src[hash_src_size];
-        memcpy(hash_src, auth_packet, offsetof(MeshPacket, near_hello_authorize.hash));
+        memcpy(&hash_src, auth_packet, offsetof(MeshPacket, near_hello_authorize.hash));
         memcpy(&hash_src[offsetof(MeshPacket, near_hello_authorize.hash)], &pre_shared_key, sizeof(pre_shared_key));
-        Os::sha256(hash_src, hash_src_size, hash_digest);
-
-        memcpy(&auth_packet->near_hello_authorize.hash, hash_digest, sizeof(hashdigest_t));
+        auth_packet->near_hello_authorize.hash = Os::Sha256Hasher::hash<hashdigest_t>(&hash_src, hash_src_size);
 
         // sending
+        packet_log.write("sending HEAR_HELLO_AUTHORIZE");
         write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending secure HEAR_HELLO_AUTHORIZE");
         interface->send_packet(phy_addr, auth_packet, packet_size);
         interface->free_near_packet(auth_packet);
@@ -195,32 +208,41 @@ void MeshController::handle_near_secure(uint interface_id, MeshPhyAddrPtr phy_ad
     }
 
     else if (packet_type == MeshPacketType::HEAR_HELLO_AUTHORIZE) {
-        if (!MESH_FIELD_ACCESSIBLE(near_hello_authorize, size))
+        packet_log.write("HEAR_HELLO_AUTHORIZE");
+
+        if (!MESH_FIELD_ACCESSIBLE(near_hello_authorize, size)) {
+            packet_log.write("DISCARD (small size: near_hello_authorize is not accessible)");
             return;
+        }
 
         // checking if we were waiting for this packet (from this address and with this type)
         auto est_session = interface_descr.sessions->get_or_none_est_session(phy_addr);
-        if (est_session == nullptr || est_session->stage != PeerSecureSessionEstablishmentStage::WAITING_FOR_HELLO_AUTH)
+        if (est_session == nullptr || est_session->stage != PeerSecureSessionEstablishmentStage::WAITING_FOR_HELLO_AUTH) {
+            packet_log.write("DISCARD (no est session associated with sender or a different est session state found)");
             return;
+        }
 
         // generating verification hash
-        ubyte hash_digest[32];
         auto hash_src_size = offsetof(MeshPacket, near_hello_authorize.hash) + sizeof(pre_shared_key);
         ubyte hash_src[hash_src_size];
-        memcpy(hash_src, packet, offsetof(MeshPacket, near_hello_authorize.hash));
+        memcpy(&hash_src, packet, offsetof(MeshPacket, near_hello_authorize.hash));
         memcpy(&hash_src[offsetof(MeshPacket, near_hello_authorize.hash)], &pre_shared_key, sizeof(pre_shared_key));
-        Os::sha256(hash_src, hash_src_size, hash_digest);
+        auto computed_verif_hash = Os::Sha256Hasher::hash<hashdigest_t>(&hash_src, hash_src_size);
 
-        if (!!memcmp(hash_digest, &packet->near_hello_authorize.hash, sizeof(hashdigest_t)))
+        if (computed_verif_hash != packet->near_hello_authorize.hash) {
+            packet_log.write("DISCARD (security hash is not valid)");
             return;
+        }
 
         // checks
-        if (!interface->accept_near_packet(phy_addr, packet, size))
+        if (!interface->accept_near_packet(phy_addr, packet, size)) {
+            packet_log.write("DISCARD (interface did not accept packet)");
             return;
+        }
 
         // setting session
         auto session = interface_descr.sessions->get_or_create_session(phy_addr);
-        net_loadstore_nonscalar(session->secure.session_key, packet->near_hello_authorize.session_key);
+        session->secure.session_key = packet->near_hello_authorize.session_key;
         session->secure.peer_far_addr = packet->near_hello_authorize.self_far_addr;
         session->secure.prev_peer_timestamp = packet->near_hello_authorize.initial_timestamp;
 
@@ -233,11 +255,12 @@ void MeshController::handle_near_secure(uint interface_id, MeshPhyAddrPtr phy_ad
         // generating hash (packet sign)
         auto hash_j_size = offsetof(MeshPacket, near_hello_joined_secure.hash) + sizeof(pre_shared_key);
         ubyte hash_j[hash_j_size];
-        memcpy(hash_j, joined_packet, offsetof(MeshPacket, near_hello_joined_secure.hash));
+        memcpy(&hash_j, joined_packet, offsetof(MeshPacket, near_hello_joined_secure.hash));
         memcpy(&hash_j[offsetof(MeshPacket, near_hello_joined_secure.hash)], &pre_shared_key, sizeof(pre_shared_key));
-        Os::sha256(hash_j, hash_j_size, hash_digest);
+        joined_packet->near_hello_joined_secure.hash = Os::Sha256Hasher::hash<hashdigest_t>(&hash_j, hash_j_size);
 
-        memcpy(&joined_packet->near_hello_joined_secure.hash, hash_digest, sizeof(hashdigest_t));
+        packet_log.write("sending NEAR_HELLO_INIT");
+        packet_log.write("authorized peer");
 
         // sending
         write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending secure NEAR_HELLO_JOINED");
@@ -247,68 +270,92 @@ void MeshController::handle_near_secure(uint interface_id, MeshPhyAddrPtr phy_ad
         // registering peer and removing session establishment info
         interface_descr.sessions->remove_est_session(phy_addr);
         printf("time after auth handler: %llu\n", Os::get_microseconds());
-        printf("peer session done: from auth (other addr: %d)\n", session->secure.peer_far_addr);
+        printf("peer session done: from auth (other addr: %u)\n", (uint) session->secure.peer_far_addr);
 
         interface_descr.sessions->register_far_addr(session->secure.peer_far_addr, phy_addr);
         router.add_peer(session->secure.peer_far_addr, interface);
     }
 
     else if (packet_type == MeshPacketType::NEAR_HELLO_JOINED) {
-        if (!MESH_FIELD_ACCESSIBLE(near_hello_joined_secure, size))
+        packet_log.write("NEAR_HELLO_JOINED");
+
+        if (!MESH_FIELD_ACCESSIBLE(near_hello_joined_secure, size)) {
+            packet_log.write("DISCARD (small size: near_hello_joined_secure is not accessible)");
             return;
+        }
 
         // checking if we were waiting for this packet (from this address and with this type)
         auto est_session = interface_descr.sessions->get_or_none_est_session(phy_addr);
-        if (est_session == nullptr || est_session->stage != PeerSecureSessionEstablishmentStage::WAITING_FOR_HELLO_JOINED)
+        if (est_session == nullptr || est_session->stage != PeerSecureSessionEstablishmentStage::WAITING_FOR_HELLO_JOINED) {
+            packet_log.write("DISCARD (no est session associated with sender or a different est session state found)");
             return;
+        }
 
         // generating verification hash
-        ubyte hash_digest[32];
         auto hash_j_size = offsetof(MeshPacket, near_hello_joined_secure.hash) + sizeof(pre_shared_key);
         ubyte hash_src[hash_j_size];
-        memcpy(hash_src, packet, offsetof(MeshPacket, near_hello_joined_secure.hash));
+        memcpy(&hash_src, packet, offsetof(MeshPacket, near_hello_joined_secure.hash));
         memcpy(&hash_src[offsetof(MeshPacket, near_hello_joined_secure.hash)], &pre_shared_key, sizeof(pre_shared_key));
-        Os::sha256(hash_src, hash_j_size, hash_digest);
+        auto computed_verif_hash = Os::Sha256Hasher::hash<hashdigest_t>(&hash_src, hash_j_size);
 
-        if (!!memcmp(hash_digest, &packet->near_hello_joined_secure.hash, sizeof(hashdigest_t)))
+        if (computed_verif_hash != packet->near_hello_joined_secure.hash) {
+            packet_log.write("DISCARD (security hash is not valid)");
             return;
+        }
 
         // checks
-        if (!interface->accept_near_packet(phy_addr, packet, size))
+        if (!interface->accept_near_packet(phy_addr, packet, size)) {
+            packet_log.write("DISCARD (interface did not accept packet)");
             return;
+        }
+
+        packet_log.write("authorized peer");
 
         // setting session
         auto session = interface_descr.sessions->get_or_create_session(phy_addr);
-        net_loadstore_nonscalar(session->secure.session_key, est_session->session_info.session_key);
+        session->secure.session_key = est_session->session_info.session_key;
         session->secure.peer_far_addr = packet->near_hello_joined_secure.self_far_addr;
         session->secure.prev_peer_timestamp = packet->near_hello_joined_secure.initial_timestamp;
 
         interface_descr.sessions->remove_est_session(phy_addr);
         printf("time after joined handler: %llu\n", Os::get_microseconds());
-        printf("peer session done: from joined (other addr: %d)\n", session->secure.peer_far_addr);
+        printf("peer session done: from joined (other addr: %u)\n", (uint) session->secure.peer_far_addr);
 
         interface_descr.sessions->register_far_addr(session->secure.peer_far_addr, phy_addr);
         router.add_peer(session->secure.peer_far_addr, interface);
     }
 }
 
-void MeshController::handle_near_insecure(uint interface_id, MeshPhyAddrPtr phy_addr, MeshPacket* packet, uint size) {
+void MeshController::handle_near_insecure(uint interface_id, MeshPhyAddrPtr phy_addr, MeshPacket* packet, uint size,
+                                          PacketLog& packet_log) {
     auto& interface_descr = interfaces[interface_id];
     auto interface = interface_descr.interface;
     auto packet_type = packet->type;
 
     if (packet_type == MeshPacketType::NEAR_HELLO) {
-        if (!MESH_FIELD_ACCESSIBLE(near_hello_insecure, size))
+        packet_log.write("NEAR_HELLO");
+
+        if (!MESH_FIELD_ACCESSIBLE(near_hello_insecure, size)) {
+            packet_log.write("DISCARD (small size: near_hello_insecure is not accessible)");
             return;
-        if (!netname_cmp(packet->near_hello_insecure.network_name))
+        }
+        if (!netname_cmp(packet->near_hello_insecure.network_name)) {
+            packet_log.write("DISCARD (network name mismatched: {:s})",
+                             std::string_view((char*) packet->near_hello_insecure.network_name,
+                                              sizeof(packet->near_hello_insecure.network_name)));
             return;
+        }
 
         auto session = interface_descr.sessions->get_or_create_session(phy_addr);
         session->insecure.peer_far_addr = packet->near_hello_insecure.self_far_addr;
 
         if (!interface->accept_near_packet(phy_addr, packet, size)) {
+            packet_log.write("DISCARD (interface did not accept packet)");
             return;
         }
+
+        packet_log.write("sending NEAR_HELLO_JOINED");
+        packet_log.write("authorized peer");
 
         auto packet_size = MESH_CALC_SIZE(near_hello_joined_insecure);
         auto joined_packet = interface->alloc_near_packet(MeshPacketType::NEAR_HELLO_JOINED, packet_size);
@@ -318,19 +365,25 @@ void MeshController::handle_near_insecure(uint interface_id, MeshPhyAddrPtr phy_
         interface->free_near_packet(joined_packet);
 
         router.add_peer(session->insecure.peer_far_addr, interface);
-        printf("got insecure near hello (opponent addr: %d)\n", session->insecure.peer_far_addr);
+        printf("got insecure near hello (opponent addr: %u)\n", (uint) session->insecure.peer_far_addr);
         fflush(stdout);
     }
 
     else if (packet_type == MeshPacketType::NEAR_HELLO_JOINED) {
-        if (!MESH_FIELD_ACCESSIBLE(near_hello_joined_insecure, size))
+        packet_log.write("NEAR_HELLO_JOINED");
+
+        if (!MESH_FIELD_ACCESSIBLE(near_hello_joined_insecure, size)) {
+            packet_log.write("DISCARD (small size: near_hello_joined_insecure is not accessible)");
             return;
+        }
 
         auto session = interface_descr.sessions->get_or_create_session(phy_addr);
         session->insecure.peer_far_addr = packet->near_hello_joined_insecure.self_far_addr;
         router.add_peer(session->insecure.peer_far_addr, interface);
 
-        printf("got insecure near joined (opponent addr: %d)\n", session->insecure.peer_far_addr);
+        packet_log.write("authorized peer");
+
+        printf("got insecure near joined (opponent addr: %u)\n", (uint) session->insecure.peer_far_addr);
         fflush(stdout);
     }
 }
@@ -354,11 +407,12 @@ void Router::add_rx_data_packet_to_cache(DataStreamIdentity identity, uint offse
 }
 
 bool MeshController::handle_data_first_packet(PacketFarDataFirst* packet, uint payload_size,
-                                              far_addr_t src, far_addr_t dst) {
+                                              far_addr_t src, far_addr_t dst, PacketLog& packet_log) {
     auto stream_size = packet->stream_size;
 
     // retransmit packet if it is not for us
     if (dst != self_addr && dst != BROADCAST_FAR_ADDR) {
+        packet_log.write("FORWARD (as data forward)");
         router.write_data_stream_bytes(dst, 0, packet->payload, payload_size, true,
                                        packet->stream_id,
                                        packet->stream_size, 0, src);
@@ -369,11 +423,15 @@ bool MeshController::handle_data_first_packet(PacketFarDataFirst* packet, uint p
     if (payload_size >= stream_size && dst != BROADCAST_FAR_ADDR) {
         auto stream_content = (ubyte*) malloc(stream_size);
         memcpy(stream_content, packet->payload, stream_size);
+        packet_log.write("COMPLETE (fast path: single packet, unicast)");
         compete_data_stream(stream_content, stream_size, src, dst);
         return true;
     }
+
     // create stream and add packet to it
     else {
+        packet_log.write("DATA ADD (stream created/found and data added)");
+
         DataStreamIdentity identity;
         identity.src_addr = src;
         identity.dst_addr = dst;
@@ -387,7 +445,7 @@ bool MeshController::handle_data_first_packet(PacketFarDataFirst* packet, uint p
 }
 
 bool MeshController::handle_data_part_packet(PacketFarDataPart8* packet, uint payload_size,
-                                             far_addr_t src, far_addr_t dst) {
+                                             far_addr_t src, far_addr_t dst, PacketLog& packet_log) {
     DataStreamIdentity identity;
     identity.src_addr = src;
     identity.dst_addr = dst;
@@ -399,6 +457,7 @@ bool MeshController::handle_data_part_packet(PacketFarDataPart8* packet, uint pa
 
     // retransmit packet if it is not for us
     if (dst != self_addr && dst != BROADCAST_FAR_ADDR) {
+        packet_log.write("FORWARD (as data forward)");
         router.write_data_stream_bytes(dst, offset, packet->payload, payload_size, true,
                                        packet->stream_id, 0, 0, src);
         return false;
@@ -407,12 +466,14 @@ bool MeshController::handle_data_part_packet(PacketFarDataPart8* packet, uint pa
     // find existing stream to add packet to, or cache the packet until it expires or stream appears
     auto stream_iter = data_streams.find(identity);
     if (stream_iter == data_streams.end()) {
+        packet_log.write("RX_CACHE (saving packet: no stream created for this ID)");
         router.add_rx_data_packet_to_cache(identity, offset, packet->payload, payload_size);
         return false;
     }
     auto& stream = stream_iter->second;
 
     // add data and check if stream can be finished
+    packet_log.write("DATA ADD (stream found and data added)");
     auto result = stream.add_data(offset, packet->payload, payload_size);
     if (result)
         stream.last_modif_timestamp = Os::get_microseconds();
@@ -421,7 +482,7 @@ bool MeshController::handle_data_part_packet(PacketFarDataPart8* packet, uint pa
 }
 
 void MeshController::retransmit_packet_first_broadcast(MeshPacket* packet, uint packet_size, uint allocated_packet_size,
-                                                       far_addr_t src_addr, uint payload_size) {
+                                                       far_addr_t src_addr, uint payload_size, PacketLog& packet_log) {
     // temporary malloced memory that is large enough to fit packet + security payload in it (if it is required)
     MeshPacket* oversize_storage = nullptr;
 
@@ -438,6 +499,7 @@ void MeshController::retransmit_packet_first_broadcast(MeshPacket* packet, uint 
         auto curr_packet_ptr = oversize_storage ? oversize_storage : packet;
 
         if (send_size > mtu) {
+            packet_log.write("FORWARD (broadcast retransmission with reshaping (size={}, mtu={})", send_size, mtu);
             router.write_data_stream_bytes(BROADCAST_FAR_ADDR, 0, curr_packet_ptr->far.data.first.payload,
                                            payload_size, true,
                                            curr_packet_ptr->far.data.first.stream_id,
@@ -463,7 +525,9 @@ void MeshController::retransmit_packet_first_broadcast(MeshPacket* packet, uint 
             }
 
             // sending directly into interface
-            write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: retransmitting broadcast to far(%d)", peer_addr);
+            packet_log.write("FORWARD (broadcast retransmission as is (size={}, mtu={})", send_size, mtu);
+            write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: retransmitting broadcast to far(%u)",
+                      (uint) peer_addr);
             interface->send_packet(phy_addr, curr_packet_ptr, send_size);
         }
     }
@@ -474,7 +538,7 @@ void MeshController::retransmit_packet_first_broadcast(MeshPacket* packet, uint 
 }
 
 void MeshController::retransmit_packet_part_broadcast(MeshPacket* packet, uint packet_size, uint allocated_packet_size,
-                                                      far_addr_t src_addr, uint payload_size) {
+                                                      far_addr_t src_addr, uint payload_size, PacketLog& packet_log) {
     // temporary malloced memory that is large enough to fit packet + security payload in it (if it is required)
     MeshPacket* oversize_storage = nullptr;
 
@@ -491,6 +555,7 @@ void MeshController::retransmit_packet_part_broadcast(MeshPacket* packet, uint p
         auto curr_packet_ptr = oversize_storage ? oversize_storage : packet;
 
         if (send_size > mtu) {
+            packet_log.write("FORWARD (broadcast retransmission with reshaping (size={}, mtu={})", send_size, mtu);
             router.write_data_stream_bytes(BROADCAST_FAR_ADDR, curr_packet_ptr->far.data.part_8.offset,
                                            curr_packet_ptr->far.data.first.payload,
                                            payload_size, true,
@@ -516,7 +581,9 @@ void MeshController::retransmit_packet_part_broadcast(MeshPacket* packet, uint p
             }
 
             // sending directly into interface
-            write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: retransmitting broadcast to far(%d)", peer_addr);
+            packet_log.write("FORWARD (broadcast retransmission as is (size={}, mtu={})", send_size, mtu);
+            write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: retransmitting broadcast to far(%u)",
+                      (uint) peer_addr);
             interface->send_packet(phy_addr, curr_packet_ptr, send_size);
         }
     }
@@ -529,10 +596,7 @@ void MeshController::retransmit_packet_part_broadcast(MeshPacket* packet, uint p
 
 // mesh controller
 MeshController::MeshController(const char* netname, far_addr_t self_addr_, bool run_thread_poll_task) : self_addr(self_addr_) {
-    memset(network_name, 0, sizeof(network_name));
-    memcpy(network_name, netname, std::min(strlen(netname), sizeof(network_name)));
-
-    memset(pre_shared_key, 0, sizeof(pre_shared_key));
+    memcpy(network_name.data(), netname, std::min(strlen(netname), sizeof(network_name)));
 
     if (run_thread_poll_task)
         this->run_thread_poll_task();
@@ -543,96 +607,94 @@ void MeshController::run_thread_poll_task() {
                     CHECK_PACKETS_TASK_PRIORITY, &check_packets_task_handle, CHECK_PACKETS_TASK_AFFINITY);
 }
 
-// todo remove them when debugging done
-#define MAC2STR(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
-#define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
-
 void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshPacket* packet, uint size) {
-    if (!MESH_FIELD_ACCESSIBLE(type, size))
-        return;
-
     auto& interface_descr = interfaces[interface_id];
     auto interface = interface_descr.interface;
+    PacketLog packet_log;
 
-    // log a new packet
-    if (is_log_feature_present(LogFeatures::TRACE_PACKET_IO)) {
-        const char* address_string;
-
-        if (interface_descr.address_size) {
-            // 3 is strlen("00:") (and \0 instead of ":" at the end of string)
-            // alloca() memory will only free after function returns
-            auto address_str_octets = (char(*)[3]) alloca(3 * interface_descr.address_size);
-
-            auto addr_bytes = (ubyte*) alloca(interface_descr.address_size);
-            interface_descr.interface->write_addr_bytes(phy_addr, addr_bytes);
-
-            // writing octets
-            for (int byte_i = 0; byte_i < interface_descr.address_size; ++byte_i) {
-                sprintf(address_str_octets[byte_i], "%02x", addr_bytes[byte_i]);
-                address_str_octets[byte_i][2] = ':'; // octet separator
-            }
-
-            address_str_octets[interface_descr.address_size - 1][2] = '\0'; // placing null-byte
-            address_string = address_str_octets[0];
-        }
-        else {
-            address_string = "unknown";
-        }
-
-        // logging
-        write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "got a packet from (%u)(%s), type=%d, size: %u",
-                  interface_id, address_string, (int) packet->type, size);
-    }
-
-    // todo handle non-secured interfaces as well
-    // todo add encryption for data streams
-
+    // pre-declare local vars to allow gotos... todo split this function to a few and change gotos to returns
     far_addr_t tx_addr;
     PeerSessionInfo* session;
-    uint allocated_packet_size = size;
-    auto packet_type = packet->type;
+    uint allocated_packet_size;
+    MeshPacketType packet_type;
+    far_addr_t src;
+    far_addr_t dst;
+
+    // log basic packet info
+    packet_log.write_raw("[{}]: new packet from ", self_addr);
+    if (interface_descr.address_size) {
+        auto addr_bytes = (ubyte*) alloca(interface_descr.address_size);
+        interface_descr.interface->write_addr_bytes(phy_addr, addr_bytes);
+        packet_log.write_raw_bytes(addr_bytes, interface_descr.address_size);
+    }
+    else {
+        packet_log.write_raw("unknown");
+    }
+    packet_log.write("{} bytes raw", (uint) size);
+    if (interface_descr.is_secured) packet_log.write("SECURE");
+    else packet_log.write("INSECURE");
+
+    // ensure packet has enough size to read packet type
+    if (!MESH_FIELD_ACCESSIBLE(type, size)) {
+        packet_log.write("DISCARD (small size: packet type is not accessible)");
+        goto end;
+    }
+
+    // todo add encryption for data streams
+
+    allocated_packet_size = size;
+    packet_type = packet->type;
 
     // gathering secure/insecure session info and checking packet signature
+    if (packet_type >= MeshPacketType::FIRST_NEAR_PACKET_NUM) {
+        packet_log.write("NEAR");
+        write_log(self_addr, LogFeatures::TRACE_PACKET, "packet is NEAR");
+
+        if (interface_descr.is_secured)
+            handle_near_secure(interface_id, phy_addr, packet, size, packet_log);
+        else
+            handle_near_insecure(interface_id, phy_addr, packet, size, packet_log);
+
+        goto end;
+    }
+
+    packet_log.write("FAR");
     if (interface_descr.is_secured) {
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet is from secure interface");
 
-        if (packet_type >= MeshPacketType::FIRST_NEAR_PACKET_NUM) {
-            write_log(self_addr, LogFeatures::TRACE_PACKET, "packet is NEAR");
-            handle_near_secure(interface_id, phy_addr, packet, size);
-            return;
-        }
-
-        write_log(self_addr, LogFeatures::TRACE_PACKET, "packet is FAR");
-
         session = interface_descr.sessions->get_or_none_session(phy_addr);
         if (!session) {
+            packet_log.write("DISCARD (no session associated with sender)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because no session found");
-            return;
+            goto end;
         }
 
         auto sign_offset = (int) size - (int) MESH_SECURE_PACKET_OVERHEAD;
-        //if (sign_offset < esp_cpu_process_stack_pc(size))
         if (sign_offset <= 0) {
+            packet_log.write("DISCARD (small size: no security payload can be found)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because no security payload found");
-            return;
+            goto end;
         }
         auto sign = (MessageSign*) ((ubyte*) packet + sign_offset);
 
-        auto timestamp = sign->timestamp;
+        timestamp_t timestamp = sign->timestamp;
         hashdigest_t packet_signature;
         memcpy(&packet_signature, &sign->hash, sizeof(hashdigest_t));
         tx_addr = session->secure.peer_far_addr;
 
         if (timestamp < session->secure.prev_peer_timestamp) {
+            packet_log.write("DISCARD (security timestamp is not valid: got {}, expected{}+)",
+                             timestamp, session->secure.prev_peer_timestamp);
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because security timestamp invalid");
-            return;
+            goto end;
         }
 
         auto correct_signature = calc_packet_signature(session, packet, sign_offset, timestamp);
 
         if (!!memcmp(&correct_signature, &packet_signature, sizeof(correct_signature))) {
+            packet_log.write("DISCARD (security hash is not valid)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because security hash invalid");
-            return;
+            goto end;
         }
 
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet security check passed");
@@ -644,18 +706,11 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
     else {
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet is from insecure interface");
 
-        if (packet_type >= MeshPacketType::FIRST_NEAR_PACKET_NUM) {
-            write_log(self_addr, LogFeatures::TRACE_PACKET, "packet is NEAR");
-            handle_near_insecure(interface_id, phy_addr, packet, size);
-            return;
-        }
-
-        write_log(self_addr, LogFeatures::TRACE_PACKET, "packet is FAR");
-
         session = interface_descr.sessions->get_or_none_session(phy_addr);
         if (!session) {
+            packet_log.write("DISCARD (no session associated with sender)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because no session found");
-            return;
+            goto end;
         }
         tx_addr = session->insecure.peer_far_addr;
 
@@ -664,63 +719,82 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
 
     // check optimized far data packets
     if (packet_type == MeshPacketType::FAR_OPTIMIZED_DATA_FIRST) {
+        packet_log.write("FAR_OPTIMIZED_DATA_FIRST (from {})", tx_addr);
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet type is FAR_OPTIMIZED_DATA_FIRST");
+
         if (!MESH_FIELD_ACCESSIBLE(opt_data.first, size)) {
+            packet_log.write("DISCARD (small size: opt_data.first is not accessible)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because header size invalid");
-            return;
+            goto end;
         }
 
         auto payload_size = size - MESH_CALC_SIZE(opt_data.first.payload);
-        handle_data_first_packet(&packet->opt_data.first, payload_size, tx_addr, self_addr);
-        return;
+        handle_data_first_packet(&packet->opt_data.first, payload_size, tx_addr, self_addr, packet_log);
+        goto end;
     }
 
     if (packet_type == MeshPacketType::FAR_OPTIMIZED_DATA_PART) {
+        packet_log.write("FAR_OPTIMIZED_DATA_PART (from {})", tx_addr);
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet type is FAR_OPTIMIZED_DATA_PART");
+
         if (!MESH_FIELD_ACCESSIBLE(opt_data.part_8, size)) {
+            packet_log.write("DISCARD (small size: opt_data.part_8 is not accessible)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because header size invalid");
-            return;
+            goto end;
         }
 
         auto payload_size = size - MESH_CALC_SIZE(opt_data.part_8.payload);
-        handle_data_part_packet(&packet->opt_data.part_8, payload_size, tx_addr, self_addr);
-        return;
+        handle_data_part_packet(&packet->opt_data.part_8, payload_size, tx_addr, self_addr, packet_log);
+        goto end;
     }
 
     // parse common far packets
     if (!MESH_FIELD_ACCESSIBLE(far.dst_addr, size)) {
+        packet_log.write("DISCARD (small size: far addresses are not accessible)");
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because far header size invalid");
-        return;
+        goto end;
     }
-    far_addr_t src = packet->far.src_addr;
-    far_addr_t dst = packet->far.dst_addr;
+    src = packet->far.src_addr;
+    dst = packet->far.dst_addr;
+
+    packet_log.write("{} -> {}", src, dst);
+    if (dst == BROADCAST_FAR_ADDR)
+        packet_log.write("BROADCAST");
 
     if (src == self_addr) {
+        packet_log.write("DISCARD (packet sent from current device)");
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because it's sent from the current device");
-        return;
+        goto end;
     }
 
     if (packet_type == MeshPacketType::FAR_PING) {
+        packet_log.write("FAR_PING");
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet type is FAR_PING");
+
         if (!MESH_FIELD_ACCESSIBLE(far.ping, size)) {
+            packet_log.write("DISCARD (small size: far ping structure is not accessible)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because header size invalid");
-            return;
+            goto end;
         }
         if (!--packet->far.ttl) {
+            packet_log.write("DISCARD (TTL dropped to zero)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because ttl expired");
-            return;
+            goto end;
         }
 
         if (interface_descr.mtu < packet->far.ping.min_mtu) {
+            packet_log.write("change min MTU ({} -> {})", (uint) packet->far.ping.min_mtu, (uint) interface_descr.mtu);
             packet->far.ping.min_mtu = interface_descr.mtu;
             packet->far.ping.router_num_with_min_mtu = packet->far.ping.routers_passed;
         }
         ++packet->far.ping.routers_passed;
 
         if (dst == self_addr) {
+            packet_log.write("sending FAR_PING_RESPONSE");
+
             packet->type = MeshPacketType::FAR_PING_RESPONSE;
             packet->far.ttl = (decltype(packet->far.ttl)) (packet->far.ping.routers_passed + 1); // the "perfect" ttl, based on route length
-            packet->far.dst_addr = packet->far.src_addr; // todo check if this copies correctly
+            packet->far.dst_addr = packet->far.src_addr;
             packet->far.src_addr = self_addr;
 
             if (interface_descr.is_secured) {
@@ -729,85 +803,117 @@ void MeshController::on_packet(uint interface_id, MeshPhyAddrPtr phy_addr, MeshP
             }
 
             // size is always enough because sending packet through the same interface by which the packet was received
-            write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending FAR_PING_RESPONSE to far(%d)", src);
+            write_log(self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending FAR_PING_RESPONSE to far(%u)", (uint) src);
             interface->send_packet(phy_addr, packet, size);
         }
         else {
+            packet_log.write("FORWARD (as is)");
             router.send_packet(packet, size, allocated_packet_size);
         }
 
         router.add_route(src, tx_addr, packet->far.ping.routers_passed);
-        return;
+        goto end;
     }
 
     // retransmitting packet (some required-to-retransmit packets go further and will be retransmitted
     // inside it's handlers (handle_data_first_packet(), handle_data_part_packet())
     if (dst != self_addr && dst != BROADCAST_FAR_ADDR) {
+        packet_log.write("should be forwarded");
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet is not for us and not broadcast");
-        if (!net_pre_decrement(packet->far.ttl)) {
+
+        if (!--packet->far.ttl) {
+            packet_log.write("DISCARD (TTL dropped to zero)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because ttl expired");
-            return;
+            goto end;
         }
 
         // retransmit if packet fits the peers MTU (any non-data packet do)
         if (router.send_packet(packet, size, allocated_packet_size)) {
-            write_log(self_addr, LogFeatures::TRACE_PACKET, "packet retransmitted because it fits ");
-            return;
+            packet_log.write("FORWARD (as is)");
+            write_log(self_addr, LogFeatures::TRACE_PACKET, "packet retransmitted because it fits");
+            goto end;
         }
     }
 
     if (packet_type == MeshPacketType::FAR_PING_RESPONSE) {
+        packet_log.write("FAR_PING_RESPONSE");
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet type is FAR_PING_RESPONSE");
+
         if (!MESH_FIELD_ACCESSIBLE(far.ping_response, size)) {
+            packet_log.write("DISCARD (small size: far.ping_response is not accessible)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because header size invalid");
-            return;
+            goto end;
         }
+
         if (!--packet->far.ttl) {
+            packet_log.write("DISCARD (TTL dropped to zero)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because ttl expired");
-            return;
+            goto end;
         }
 
         router.add_route(src, tx_addr, packet->far.ping_response.routers_passed);
-        return;
+        goto end;
     }
 
     if (packet_type == MeshPacketType::FAR_DATA_FIRST) {
+        packet_log.write("FAR_DATA_FIRST");
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet type is FAR_DATA_FIRST");
+
         if (!MESH_FIELD_ACCESSIBLE(far.data.first, size)) {
+            packet_log.write("DISCARD (small size: far.data.first is not accessible)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because header size invalid");
-            return;
+            goto end;
         }
-        if (!net_pre_decrement(packet->far.ttl)) {
+
+        if (!--packet->far.ttl) {
+            packet_log.write("DISCARD (TTL dropped to zero)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because ttl expired");
-            return;
+            goto end;
         }
 
         auto payload_size = size - MESH_CALC_SIZE(far.data.first.payload);
-        if (handle_data_first_packet(&packet->far.data.first, payload_size, src, dst) && dst == BROADCAST_FAR_ADDR) {
-            retransmit_packet_first_broadcast(packet, size, allocated_packet_size, src, payload_size);
+        packet_log.write_raw(" (stream_id={}, stream_size={}, part_size={})", (uint) packet->far.data.first.stream_id,
+                             (uint) packet->far.data.first.stream_size, payload_size);
+
+        if (handle_data_first_packet(&packet->far.data.first, payload_size, src, dst, packet_log) && dst == BROADCAST_FAR_ADDR) {
+            retransmit_packet_first_broadcast(packet, size, allocated_packet_size, src, payload_size, packet_log);
         }
-        return;
+        goto end;
     }
 
     if (packet_type == MeshPacketType::FAR_DATA_PART) {
+        packet_log.write("FAR_DATA_PART");
         write_log(self_addr, LogFeatures::TRACE_PACKET, "packet type is FAR_DATA_PART");
+
         if (!MESH_FIELD_ACCESSIBLE(far.data.part_8, size)) {
+            packet_log.write("DISCARD (small size: far.data.part_8 is not accessible)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because header size invalid");
-            return;
+            goto end;
         }
-        if (!net_pre_decrement(packet->far.ttl)) {
+
+        if (!--packet->far.ttl) {
+            packet_log.write("DISCARD (TTL dropped to zero)");
             write_log(self_addr, LogFeatures::TRACE_PACKET, "packet discarded because ttl expired");
-            return;
+            goto end;
         }
 
         auto payload_size = size - MESH_CALC_SIZE(far.data.part_8.payload);
-        if (handle_data_part_packet(&packet->far.data.part_8, payload_size, src, dst) && dst == BROADCAST_FAR_ADDR) {
-            retransmit_packet_part_broadcast(packet, size, allocated_packet_size, src, payload_size);
+        packet_log.write_raw(" (stream_id={}, offset={}, part_size={})", (uint) packet->far.data.first.stream_id,
+                             (uint) packet->far.data.part_8.offset, payload_size);
+
+        if (handle_data_part_packet(&packet->far.data.part_8, payload_size, src, dst, packet_log) && dst == BROADCAST_FAR_ADDR) {
+            retransmit_packet_part_broadcast(packet, size, allocated_packet_size, src, payload_size, packet_log);
         }
-        return;
+        goto end;
     }
 
     write_log(self_addr, LogFeatures::TRACE_PACKET, "packet control reached end of on_packet() function");
+
+    end:
+    if constexpr (ENABLE_PACKET_LOGGER) {
+        if (callbacks.packet_tracing_log)
+            callbacks.packet_tracing_log(packet_log.finish());
+    }
 }
 
 [[noreturn]] void MeshController::task_check_packets(void* userdata) {
@@ -845,11 +951,9 @@ void MeshController::set_psk_password(const char* password) {
     const char salt[] = "1n5aNeEeEeE CuCuMbErS and HYSTERICAL magicircles!";
     auto hash_src = (ubyte*) alloca(sizeof(salt) + strlen(password));
     memcpy(hash_src, password, strlen(password) + 1);
-    memcpy(&hash_src[strlen(password) + 1], salt, sizeof(salt) - 1);
+    memcpy(&hash_src[strlen(password) + 1], &salt, sizeof(salt) - 1);
 
-    ubyte hash_digest[32];
-    Os::sha256(hash_src, sizeof(salt) + strlen(password), hash_digest);
-    memcpy(pre_shared_key, hash_digest, std::min(sizeof(pre_shared_key), sizeof(hash_digest)));
+    pre_shared_key = Os::Sha256Hasher::hash<decltype(pre_shared_key)>(hash_src, sizeof(salt) + strlen(password));
 }
 
 MeshController::~MeshController() {
@@ -876,6 +980,8 @@ void MeshController::check_data_streams() {
 
 
 
+
+
 // router
 void Router::add_route(far_addr_t dst, far_addr_t gateway, ubyte distance) {
     auto& route = routes[dst];
@@ -899,7 +1005,7 @@ void Router::add_route(far_addr_t dst, far_addr_t gateway, ubyte distance) {
 bool Router::send_packet(MeshPacket* packet, uint size, uint available_size) {
     // there are no broadcast packets, except for data packets, that are sent by another function
 
-    far_addr_t dst_addr = packet->far.dst_addr;
+    auto dst_addr = (far_addr_t) packet->far.dst_addr;
 
     // routing table lookup
     auto route_iter = routes.find(dst_addr);
@@ -961,7 +1067,7 @@ bool Router::send_packet(MeshPacket* packet, uint size, uint available_size) {
     }
 
     // send
-    write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending some packet to far(%d)", dst_addr);
+    write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending some packet to far(%u)", (uint) dst_addr);
     interface->send_packet(phy_addr, packet, size);
 
     // free auxiliary memory if allocated
@@ -995,7 +1101,7 @@ void Router::discover_route(far_addr_t dst) {
                 controller.generate_packet_signature(session, far_ping, MESH_CALC_SIZE(far.ping));
             }
 
-            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending FAR_PING packet to far(%d)", dst);
+            write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending FAR_PING packet to far(%u)", (uint) dst);
             interface->send_packet(phy_addr, far_ping, MESH_CALC_SIZE(far.ping) + MESH_SECURE_PACKET_OVERHEAD);
 
             peer_list = peer_list->next;
@@ -1331,7 +1437,7 @@ uint Router::write_data_stream_bytes(far_addr_t dst, uint offset, const ubyte* d
             //
         }
 
-        write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending data packet to far(%d)", dst);
+        write_log(controller.self_addr, LogFeatures::TRACE_PACKET_IO, "packet io: sending data packet to far(%u)", (uint) dst);
         interface->send_packet(phy_addr, packet, send_size);
 
         size -= chunk_size;

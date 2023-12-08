@@ -12,14 +12,14 @@
 namespace NsWifiEspNowInterface
 {
     struct MacAddr {
-        ubyte raw[6];
+        std::array<ubyte, 6> raw{};
 
-        MacAddr(const ubyte (&mac_)[6]) {memcpy(raw, mac_, 6);}
-        MacAddr() {memset(raw, 0, 6);}
+        MacAddr(const ubyte (&mac_)[6]) {memcpy(raw.data(), mac_, 6);}
+        MacAddr() = default;
     } __attribute__((packed));
 
     inline bool operator==(const MacAddr& src, const MacAddr& dst) {
-        return !memcmp(src.raw, dst.raw, 6);
+        return src.raw == dst.raw;
     }
 
     inline bool operator!=(const MacAddr& src, const MacAddr& dst) {
@@ -41,7 +41,7 @@ namespace std {
     template<>
     struct hash<NsWifiEspNowInterface::MacAddr> {
         inline std::size_t operator()(const NsWifiEspNowInterface::MacAddr& mac) const {
-            return (*(uint*)mac.raw) ^ (*(uint*)(&mac.raw[2]));
+            return (*(u32le*)mac.raw.data()) ^ (*(u32le*)(&mac.raw[2]));
         }
     };
 }

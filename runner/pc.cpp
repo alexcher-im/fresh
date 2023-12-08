@@ -18,7 +18,7 @@ int main() {
         fflush(stdout);
     };
 
-    Win32Serial serial(R"(\\.\COM6)", 115'200);
+    Win32Serial serial(R"(\\.\COM3)", 115'200);
     P2PUnsecuredShortInterface uart_interface(true, false, serial, serial);
     Os::sleep_milliseconds(1000);
     controller->add_interface(&uart_interface);

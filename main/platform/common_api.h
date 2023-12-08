@@ -96,10 +96,4 @@ namespace Os
     inline void finish_sha256(Sha256Handle* ctx, void* hash_write) {
         crypto_hash_sha256_final(ctx, (unsigned char*) hash_write);
     }
-
-    inline void sha256(const ubyte* buf, size_t size, ubyte out[32]) {
-        auto ctx = create_sha256();
-        update_sha256(&ctx, buf, size);
-        finish_sha256(&ctx, out);
-    }
 }

@@ -1,7 +1,10 @@
 #pragma once
 
-#include <cstring>
+#include "strong_type.h"
 #include "blob_types.h"
+
+#include <cstring>
+#include <functional>
 
 
 #pragma pack(push, 1)
@@ -15,12 +18,14 @@ namespace MeshProto
     // must be able to protect against spoofing, replay attacks
 
     // regular versions
+
     // todo name types in CamelCase
+    DEFINE_LOOSE_STRONG_TYPE(far_addr_t, uint, CDS_EQ() CDS_ICONV_INT() CDS_DEF_CTOR(far_addr_t));
+
     using hashdigest_t = uint;
-    using nonce_t = ubyte[8];
-    using session_key_t = ubyte[8];
+    using nonce_t = u64; // ubyte[8]
+    using session_key_t = u64; // ubyte[8]
     using timestamp_t = u64;
-    using far_addr_t = uint;
     using stream_id_t = ubyte;
 
     // serialized versions
@@ -30,6 +35,9 @@ namespace MeshProto
     using ser_timestamp_t    = BlobType<timestamp_t,   std::endian::little>;
     using ser_far_addr_t     = BlobType<far_addr_t,    std::endian::little>;
     using ser_stream_id_t    = BlobType<stream_id_t,   std::endian::little>;
+
+    static_assert(sizeof(far_addr_t) == sizeof(ser_far_addr_t));
+
 
     const far_addr_t BROADCAST_FAR_ADDR = -1;
 
@@ -238,3 +246,6 @@ namespace MeshProto
 }
 
 #pragma pack(pop)
+
+
+ODS_STD_HASH(MeshProto::far_addr_t)

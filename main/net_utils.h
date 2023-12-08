@@ -19,20 +19,20 @@ inline int net_memcmp(const void* a, const void* b, size_t size) {
 
 template <typename T>
 constexpr T swap_integral_bytes(T val) {
-    using U = typename std::make_unsigned<T>::type;
+    using U = std::make_unsigned_t<T>;
 
     U out;
 
-    if constexpr (std::is_same<U, ubyte>::value)
+    if constexpr (std::is_same_v<U, ubyte>)
         out = val;
-    else if constexpr (std::is_same<U, ushort>::value)
+    else if constexpr (std::is_same_v<U, ushort>)
         out = (val >> 8) | (val << 8);
-    else if constexpr (std::is_same<U, uint>::value)
+    else if constexpr (std::is_same_v<U, uint>)
         out = ((val>>24)&0xff) |
               ((val<<8)&0xff0000) |
               ((val>>8)&0xff00) |
               ((val<<24)&0xff000000);
-    else if constexpr (std::is_same<U, u64>::value)
+    else if constexpr (std::is_same_v<U, u64>)
         out = swap_integral_bytes((uint) (out >> 32)) &
         ((u64)swap_integral_bytes((uint) (out & 0xFFFFFFFF)) << 32);
 
@@ -55,7 +55,7 @@ inline T net_load(const T& ptr) {
     T out;
     net_memcpy(&out, &ptr, sizeof(T));
 
-    if constexpr (std::is_integral<T>::value)
+    if constexpr (std::is_integral_v<T>)
         out = num_to_le_num(out);
 
     return out;
@@ -64,13 +64,13 @@ inline T net_load(const T& ptr) {
 // call this to put data into the network packet
 template <typename T>
 inline void net_store(T& ptr, T value) {
-    if constexpr (std::is_integral<T>::value)
+    if constexpr (std::is_integral_v<T>)
         value = num_to_le_num(value);
 
     net_memcpy(&ptr, &value, sizeof(T));
 }
 
-template <typename T, typename Integral, typename = typename std::enable_if<std::is_integral<Integral>::value>::type>
+template <typename T, typename Integral> requires (std::is_integral_v<Integral>)
 inline void net_store(T& ptr, Integral value) {
     net_store(ptr, (T) value);
 }

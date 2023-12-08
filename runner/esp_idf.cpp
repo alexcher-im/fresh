@@ -1,4 +1,3 @@
-#include <cstdio>
 #include "platform/api.h"
 #include "mesh_controller.h"
 #include "wifi_esp_now_interface.h"
@@ -6,6 +5,9 @@
 #include "mesh_stream_builder.h"
 #include "platform/p2p/esp32_uart_stdout_p2p.h"
 #include "platform/p2p/stdio_p2p.h"
+
+#include <cstdio>
+
 
 using namespace MeshProto;
 
@@ -55,14 +57,14 @@ extern "C" void app_main() {
         printf("sending a data packet\n");
         fflush(stdout);
 
-        auto packet = (MeshPacket*) malloc(MESH_CALC_SIZE(far_data) + MESH_SECURE_PACKET_OVERHEAD + 70);
+        auto packet = (MeshPacket*) malloc(MESH_CALC_SIZE(far.data) + MESH_SECURE_PACKET_OVERHEAD + 70);
         packet->type = MeshPacketType::FAR_DATA_FIRST;
-        packet->src_addr = controller->self_addr;
+        packet->far.src_addr = controller->self_addr;
         for (auto& [far, peer] : controller->router.peers)
-            packet->dst_addr = far;
-        packet->far_data.first.stream_size = 70;
-        controller->router.send_packet(packet, MESH_CALC_SIZE(far_data) + 70,
-                                       MESH_CALC_SIZE(far_data) + MESH_SECURE_PACKET_OVERHEAD + 70);
+            packet->far.dst_addr = far;
+        packet->far.data.first.stream_size = 70;
+        controller->router.send_packet(packet, MESH_CALC_SIZE(far.data) + 70,
+                                       MESH_CALC_SIZE(far.data) + MESH_SECURE_PACKET_OVERHEAD + 70);
         free(packet);
     }
 

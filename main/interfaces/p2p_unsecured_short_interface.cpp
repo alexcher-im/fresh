@@ -1,8 +1,7 @@
-#include <cstdio>
-#include <cassert>
 #include "mesh_controller.h"
 #include "p2p_unsecured_short_interface.h"
-#include "net_utils.h"
+
+#include <cassert>
 
 
 using namespace MeshProto;
@@ -92,7 +91,7 @@ void P2PUnsecuredShortInterface::send_hello(MeshPhyAddrPtr phy_addr) {
     auto packet = (MeshPacket*) alloca(MESH_CALC_SIZE(near_hello_insecure));
     packet->type = MeshPacketType::NEAR_HELLO;
     packet->near_hello_insecure.self_far_addr = controller->self_addr;
-    memcpy(packet->near_hello_secure.network_name, controller->network_name, sizeof(controller->network_name));
+    memcpy(&packet->near_hello_secure.network_name, controller->network_name.data(), sizeof(controller->network_name));
 
     send_packet(phy_addr, packet, MESH_CALC_SIZE(near_hello_insecure));
 }
@@ -133,7 +132,7 @@ void NsP2PUnsecuredShortInterface::PacketCache::add_entry(const void* data, ubyt
     new_entry->data = malloc(size);
     new_entry->size = size;
     new_entry->next = nullptr;
-    net_memcpy(new_entry->data, data, size);
+    memcpy(new_entry->data, data, size);
 
     if (last_entry) {
         last_entry->next = new_entry;

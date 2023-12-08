@@ -1,7 +1,8 @@
 #pragma once
 
-#include <cstddef>
 #include "types.h"
+
+#include <cstddef>
 
 
 class BaseSerial

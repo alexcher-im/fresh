@@ -1,7 +1,8 @@
 #pragma once
 
-#include <cstdio>
 #include "base.h"
+
+#include <cstdio>
 
 
 class StdioSerial : public BaseSerial

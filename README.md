@@ -10,13 +10,14 @@ Currently, supports:
 * Stream fragmentation/defragmentation
 * Packet retransmission
 * Multi-MTU support (reshaping transit streams to lower-mtu interfaces, but not in reverse)
-* Insecure interfaces
+* Cryptographical protection against MITM/replay attacks for secure interfaces
 * Combination of both secure and insecure interfaces on the same device
 * Cross-platforming
 * Packet duplicate avoidance
-* Support for ESP-IDF v4.2+ and v5.0
+* Support for ESP-IDF v5.1.2
 
 Needs to be done:
+* Sniffing API and wireshark integration
 * Removing devices and fixing routes
 * Encryption (only authentication and integrity checking is implemented now)
 * Proper synchronization to prevent data races

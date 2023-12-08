@@ -1,8 +1,9 @@
 #pragma once
 
-#include <unordered_map>
 #include "mesh_protocol.h"
 #include "fresh_config.h"
+
+#include <unordered_map>
 
 
 enum class PeerSecureSessionEstablishmentStage
@@ -48,7 +49,7 @@ struct PeerSecureSessionEstablishmentInfo
 };
 
 
-typedef struct MeshPhyAddr_s* MeshPhyAddrPtr;
+using MeshPhyAddrPtr = struct MeshPhyAddr_s*;
 
 
 class MeshInterfaceSessionManager
