@@ -40,6 +40,9 @@ else()
     if (WIN32)
         list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/p2p/win32_p2p.cpp")
     endif()
+    if (UNIX)
+        list(APPEND FRESH_SRCS "${FRESH_SOURCE_DIR}/platform/p2p/unix_p2p.cpp")
+    endif()
 
     # add targets
     add_library(${FRESH_PROJECT_NAME} STATIC ${FRESH_SRCS})
